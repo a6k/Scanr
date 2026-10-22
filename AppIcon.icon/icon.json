@@ -39,10 +39,10 @@
             }
           ],
           "position" : {
-            "scale" : 2.7,
+            "scale" : 2.85,
             "translation-in-points" : [
               0,
-              -9
+              -31
             ]
           }
         }

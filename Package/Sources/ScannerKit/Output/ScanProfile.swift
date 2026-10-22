@@ -40,7 +40,9 @@ public struct ScanProfile: Codable, Equatable, Sendable, Identifiable {
         self.removeBlankPages = removeBlankPages
     }
 
-    public var scanSettings: ScanSettings { ScanSettings(dpi: dpi, duplex: duplex) }
+    /// Immer mit Overscan: Ohne ihn schneidet der iX500 ein schief eingezogenes Blatt an den
+    /// Ecken ab (am 2026-10-23 an einem Bon mit rund 20 Grad gemessen). Den Rand entfernt der Zuschnitt.
+    public var scanSettings: ScanSettings { ScanSettings(dpi: dpi, duplex: duplex, overscan: true) }
 
     public static let rechnungen = ScanProfile(
         id: "rechnungen", name: "Rechnungen", dpi: 300, colorMode: .blackWhite, format: .pdf,

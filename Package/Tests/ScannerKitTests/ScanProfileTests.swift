@@ -27,7 +27,7 @@ final class ScanProfileTests: XCTestCase {
         XCTAssertEqual(ScanProfile.foto.jpegQuality, 0.9)
         XCTAssertTrue(ScanProfile.foto.duplex)
         XCTAssertTrue(ScanProfile.foto.removeBlankPages)
-        XCTAssertEqual(ScanProfile.auto.scanSettings, ScanSettings(dpi: 300, duplex: true))
+        XCTAssertEqual(ScanProfile.auto.scanSettings, ScanSettings(dpi: 300, duplex: true, overscan: true))
         let r = ScanProfile.rechnungen
         XCTAssertEqual(r.id, "rechnungen")
         XCTAssertEqual(r.name, "Rechnungen")

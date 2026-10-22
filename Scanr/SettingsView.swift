@@ -34,7 +34,7 @@ private struct GeneralSettings: View {
         ("{datum}", "Datum, etwa 2026-10-22"),
         ("{zeit}", "Uhrzeit, etwa 14-05"),
         ("{profil}", "Name des Profils"),
-        ("{nr}", "Laufende Nummer des Tages, 01, 02, …"),
+        ("{nr}", "Laufende Nummer, je Tag neu bei Muster mit {datum}"),
     ]
 
     var body: some View {

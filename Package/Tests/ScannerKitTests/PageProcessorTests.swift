@@ -212,6 +212,25 @@ final class PageProcessorTests: XCTestCase {
         }
     }
 
+    func testStronglySkewedReceiptIsStraightened() {
+        // Am 2026-10-23 lag ein Bon rund 20 Grad schief; gesucht wurde nur bis 15 Grad.
+        // Halbe Winkel liegen zwischen den Punkten des groben Rasters.
+        for angle in [20.0, -20.0, 28.0, 12.5, -7.3] {
+            let scan = Self.makeScan(
+                paperMM: (80, 176), angle: angle, blocks: Self.textLines(count: 30, width: 56))
+            let out = PageProcessor.cropAndDeskew(scan)
+            let aspect = Double(out.width) / Double(out.height)
+            XCTAssertEqual(aspect, 80.0 / 176.0, accuracy: 80.0 / 176.0 * 0.03, "Winkel \(angle)")
+            XCTAssertEqual(Double(out.width), 80 / 25.4 * 100, accuracy: 8, "Winkel \(angle)")
+        }
+    }
+
+    func testStronglySkewedBlankReceiptIsBlank() {
+        // Die leere Rückseite desselben Bons: ohne Zuschnitt zählte der Kantenschatten als Tinte.
+        let scan = Self.makeScan(paperMM: (80, 176), angle: 20, shadow: true)
+        XCTAssertTrue(PageProcessor.isBlank(scan))
+    }
+
     func testReceiptAspectRatioWhenScanIsCutAtPaperLength() {
         // Längenerkennung: der Scan ist so lang wie das Papier, die Ecken ragen aus dem Bild.
         let scan = Self.makeScan(

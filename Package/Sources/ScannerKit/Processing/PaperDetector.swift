@@ -22,8 +22,13 @@ enum PaperDetector {
     static let innerFlatLength = 4
     /// Kleinster Abstand zwischen linker und rechter Kante (Analysepixel).
     static let minSpan = 20
-    /// Suchbereich für den Drehwinkel in Grad (der Einzug schiebt wenige Grad schief).
-    static let maxAngleDegrees = 15.0
+    /// Suchbereich für den Drehwinkel in Grad. Ein von Hand schief eingelegter Bon kam am
+    /// 2026-10-23 auf rund 20 Grad; 15 Grad reichten dafür nicht.
+    static let maxAngleDegrees = 30.0
+    /// Schrittweite der groben Suche in Grad; die feine Suche deckt einen Schritt nach jeder Seite ab.
+    static let coarseStepDegrees = 1.0
+    /// Schrittweite der feinen Suche in Grad.
+    static let fineStepDegrees = 0.05
     /// Anteil der Blatthöhe, den eine Linie an Kantenpunkten haben muss, um als Blattkante zu gelten.
     static let minSideFraction = 0.4
     /// Von mehreren starken Linien gilt die äußerste, wenn sie mindestens so viel Stimmen hat.
@@ -118,14 +123,14 @@ enum PaperDetector {
             let t = deg * .pi / 180
             let sc = score(t)
             if sc > bestScore { bestScore = sc; bestTheta = t }
-            deg += 0.25
+            deg += coarseStepDegrees
         }
-        var fine = bestTheta - 0.3 * .pi / 180
-        let fineEnd = bestTheta + 0.3 * .pi / 180
+        var fine = bestTheta - coarseStepDegrees * .pi / 180
+        let fineEnd = bestTheta + coarseStepDegrees * .pi / 180
         while fine <= fineEnd + 1e-12 {
             let sc = score(fine)
             if sc > bestScore { bestScore = sc; bestTheta = fine }
-            fine += 0.05 * .pi / 180
+            fine += fineStepDegrees * .pi / 180
         }
 
         // Die äußerste unter den starken Linien ist die Blattkante.

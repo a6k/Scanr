@@ -273,4 +273,22 @@ struct ScannerControllerTests {
         #expect(c.state == .disconnected)
         #expect(rig.opener.calls == 2)
     }
+
+    @Test func startRemovesStaleTempFilesFromTheOutputFolder() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("scanr-app-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        let old = ".scanr-\(Int(now.timeIntervalSince1970) - 7200)-\(UUID().uuidString).tmp"
+        let fresh = ".scanr-\(Int(now.timeIntervalSince1970) - 60)-\(UUID().uuidString).tmp"
+        for name in [old, fresh, "scan 01.pdf"] {
+            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+        }
+        var rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        rig.outputDirectory = dir
+        let c = rig.controller()
+
+        #expect(c.removeStaleTemps(now: now) == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == [fresh, "scan 01.pdf"].sorted())
+    }
 }

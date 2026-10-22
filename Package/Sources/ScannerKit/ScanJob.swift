@@ -108,6 +108,7 @@ public struct ScanJob: Sendable {
                 outputFailure = e
                 pageCount = 0
             } catch {
+                OutputFile.log.error("PDF nicht geschrieben: \(String(describing: error), privacy: .public)")
                 outputFailure = .cannotCreateFile
                 pageCount = 0
             }
@@ -188,7 +189,11 @@ public struct ScanJob: Sendable {
     /// Fragt den Namen unmittelbar vor dem Schreiben. Hat sich die Datei inzwischen angefunden,
     /// kommt ein neuer Name, höchstens `nameTries` Mal.
     private func write(ext: String, _ body: (URL) throws -> Void) throws -> URL {
-        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        } catch {
+            OutputFile.log.error("Ausgabeordner nicht anlegbar: \(String(describing: error), privacy: .public)")
+        }
         for _ in 0..<Self.nameTries {
             let url = namer.nextURL(in: outputDir, date: Date(), profile: profile, ext: ext)
             beforeWrite?(url)

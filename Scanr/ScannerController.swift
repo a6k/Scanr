@@ -146,6 +146,14 @@ final class ScannerController {
         return namer.nextURL(in: environment.outputDirectory, date: date, profile: profile, ext: ext).lastPathComponent
     }
 
+    // MARK: Aufräumen
+
+    /// Löscht Temp-Dateien eines abgestürzten Laufs im Ausgabeordner (älter als eine Stunde).
+    @discardableResult
+    func removeStaleTemps(now: Date = Date()) -> Int {
+        OutputFile.removeStaleTemps(in: environment.outputDirectory, now: now)
+    }
+
     // MARK: Scannen
 
     var isScanning: Bool { scanTask != nil }

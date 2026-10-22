@@ -17,8 +17,15 @@ public enum PDFComposer {
     }
 
     private static func render(_ pages: [(ProcessedPage, [TextLine])], to url: URL, jpegQuality: Double) throws {
-        guard let consumer = CGDataConsumer(url: url as CFURL) else { throw OutputError.cannotCreateFile }
-        guard let ctx = CGContext(consumer: consumer, mediaBox: nil, nil) else { throw OutputError.cannotCreateFile }
+        // CoreGraphics nennt keinen Grund. Ob der Ordner beschreibbar ist, sagt das Protokoll.
+        guard let consumer = CGDataConsumer(url: url as CFURL),
+              let ctx = CGContext(consumer: consumer, mediaBox: nil, nil)
+        else {
+            let dir = url.deletingLastPathComponent().path
+            let writable = FileManager.default.isWritableFile(atPath: dir)
+            OutputFile.log.error("PDF nicht anlegbar, Ordner beschreibbar: \(writable, privacy: .public)")
+            throw OutputError.cannotCreateFile
+        }
 
         for (page, lines) in pages {
             let dpi = Double(max(1, page.dpi))

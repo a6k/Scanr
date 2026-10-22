@@ -156,6 +156,7 @@ struct Rig {
     let notifier = FakeNotifier()
     let defaults: UserDefaults
     let opener: FakeOpener
+    var outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
 
     init(opener: (FakeClock) -> FakeOpener) {
         let suite = "ScanrTests.\(UUID().uuidString)"
@@ -168,7 +169,7 @@ struct Rig {
         let opener = self.opener, jobs = self.jobs
         return ScannerController(environment: ScannerEnvironment(
             defaults: defaults,
-            outputDirectory: URL(fileURLWithPath: NSTemporaryDirectory()),
+            outputDirectory: outputDirectory,
             clock: clock,
             notifier: notifier,
             open: { try opener.open() },

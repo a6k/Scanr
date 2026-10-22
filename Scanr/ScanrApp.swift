@@ -19,6 +19,7 @@ struct ScanrApp: App {
             return
         }
         notifier.activate()
+        controller.removeStaleTemps()
         let watcher = DeviceWatcher()
         self.watcher = watcher
         Task { await controller.run(arrivals: watcher.arrivals) }

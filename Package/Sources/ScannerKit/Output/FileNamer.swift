@@ -76,7 +76,7 @@ public struct FileNamer: Sendable {
     }
 
     /// Nächster freier Name: die Nummer über der höchsten, die im Ordner zu diesem Muster passt
-    /// (Groß- und Kleinschreibung egal). Rechnet nur einen Namen aus und legt nichts an. Wer
+    /// (Groß- und Kleinschreibung egal, iCloud-Platzhalter zählen mit). Rechnet nur einen Namen aus und legt nichts an. Wer
     /// schreibt, legt die Datei an, bevor er den nächsten Namen erfragt, und holt bei
     /// `OutputError.destinationExists` einen neuen Namen.
     public func nextURL(in dir: URL, date: Date, profile: ScanProfile, ext: String) -> URL {
@@ -98,7 +98,9 @@ public struct FileNamer: Sendable {
         if let re = try? NSRegularExpression(pattern: regex, options: .caseInsensitive),
            let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
         {
-            for name in names {
+            for listed in names {
+                // Ein ausgelagerter Platzhalter steht für die Datei, die iCloud weggeräumt hat.
+                let name = Self.placeholderTarget(listed) ?? listed
                 let range = NSRange(name.startIndex..., in: name)
                 guard let m = re.firstMatch(in: name, range: range), m.numberOfRanges > 1,
                       let r = Range(m.range(at: 1), in: name), let n = Int(name[r])
@@ -119,5 +121,16 @@ public struct FileNamer: Sendable {
             }
         }
         return dir.appendingPathComponent(name + "." + ext)
+    }
+
+    /// Name des Platzhalters, den iCloud Drive für eine ausgelagerte Datei hinterlässt.
+    static func placeholderName(of name: String) -> String { "." + name + ".icloud" }
+
+    /// Die Datei, für die ein iCloud-Platzhalter `.<name>.icloud` steht; nil bei anderen Namen.
+    static func placeholderTarget(_ name: String) -> String? {
+        let prefix = ".", suffix = ".icloud"
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix), name.count > prefix.count + suffix.count
+        else { return nil }
+        return String(name.dropFirst(prefix.count).dropLast(suffix.count))
     }
 }

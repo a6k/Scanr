@@ -22,11 +22,13 @@ final class PageProcessorTests: XCTestCase {
         case black
         case red
         case grey
+        case faint   // verblasster Thermodruck, Helligkeit etwa 178
         var rgb: (CGFloat, CGFloat, CGFloat) {
             switch self {
             case .black: (0.05, 0.05, 0.05)
             case .red: (0.85, 0.1, 0.1)
             case .grey: (0.45, 0.45, 0.45)
+            case .faint: (0.70, 0.70, 0.70)
             }
         }
     }
@@ -41,7 +43,8 @@ final class PageProcessorTests: XCTestCase {
     /// `canvas` ist der Scan (volle Einzugsbreite 8,5 Zoll), das Papier liegt mittig.
     static func makeScan(
         dpi: Int = 100, canvasHeightMM: Double? = nil, paperMM: (w: Double, h: Double),
-        angle: Double = 0, blocks: [Block] = [], shadow: Bool = false, noise: Bool = true
+        angle: Double = 0, blocks: [Block] = [], shadow: Bool = false, noise: Bool = true,
+        paper: (CGFloat, CGFloat, CGFloat) = (250.0 / 255, 250.0 / 255, 251.0 / 255)
     ) -> CGImage {
         let ppm = Double(dpi) / 25.4
         let cw = Int((8.5 * Double(dpi)).rounded())
@@ -67,7 +70,7 @@ final class PageProcessorTests: XCTestCase {
             ctx.setFillColor(red: 0.80, green: 0.80, blue: 0.80, alpha: 1)
             ctx.fill(paperRect.insetBy(dx: -2, dy: -2))
         }
-        ctx.setFillColor(red: 250.0 / 255, green: 250.0 / 255, blue: 251.0 / 255, alpha: 1)
+        ctx.setFillColor(red: paper.0, green: paper.1, blue: paper.2, alpha: 1)
         ctx.fill(paperRect)
         for b in blocks {
             let (r, g, bl) = b.ink.rgb
@@ -135,6 +138,64 @@ final class PageProcessorTests: XCTestCase {
     func testCroppedBlankPageWithoutBackgroundIsBlank() {
         let scan = Self.makeScan(paperMM: (210, 297), shadow: true)
         XCTAssertTrue(PageProcessor.isBlank(PageProcessor.cropAndDeskew(scan)))
+    }
+
+    func testSignatureOnOtherwiseEmptyPageIsNotBlank() {
+        // Ein paar kurze, gebogene Striche in der unteren rechten Ecke.
+        let ppm = 100 / 25.4
+        let paperW = 210.0, paperH = 297.0
+        let cw = 850, ch = Int(paperH * ppm) + 20
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ctx = CGContext(data: nil, width: cw, height: ch, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: cw, height: ch))
+        let left = (Double(cw) - paperW * ppm) / 2
+        ctx.setFillColor(red: 0.98, green: 0.98, blue: 0.98, alpha: 1)
+        ctx.fill(CGRect(x: left, y: 10, width: paperW * ppm, height: paperH * ppm))
+        ctx.setStrokeColor(red: 0.1, green: 0.1, blue: 0.3, alpha: 1)
+        ctx.setLineWidth(2.5)
+        ctx.setLineCap(.round)
+        let bx = left + 130 * ppm, by = 40.0 + 20 * ppm
+        for i in 0..<3 {
+            let o = Double(i) * 9
+            ctx.move(to: CGPoint(x: bx + o, y: by))
+            ctx.addCurve(to: CGPoint(x: bx + o + 30, y: by + 12),
+                         control1: CGPoint(x: bx + o + 8, y: by + 25), control2: CGPoint(x: bx + o + 20, y: by - 10))
+            ctx.strokePath()
+        }
+        XCTAssertFalse(PageProcessor.isBlank(ctx.makeImage()!))
+    }
+
+    func testDarkPageIsNotBlankAndCropIsSane() {
+        let dark: (CGFloat, CGFloat, CGFloat) = (0.1, 0.1, 0.11)
+        let scan = Self.makeScan(paperMM: (210, 297), angle: 0.8, blocks: Self.textLines(count: 4, width: 100), paper: dark)
+        XCTAssertFalse(PageProcessor.isBlank(scan))
+        let out = PageProcessor.cropAndDeskew(scan)
+        XCTAssertEqual(Double(out.width), 210 / 25.4 * 100, accuracy: 12)
+        XCTAssertEqual(Double(out.height), 297 / 25.4 * 100, accuracy: 12)
+        XCTAssertFalse(PageProcessor.hasColor(scan))
+        var blocks = Self.textLines(count: 4, width: 100)
+        blocks.append(Block(x: 120, y: 100, w: 60, h: 40, ink: .red))
+        XCTAssertTrue(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 0.8, blocks: blocks, paper: dark)))
+    }
+
+    func testFullWidthPageWithoutGreyKeepsItsSize() {
+        // Kein Hintergrund sichtbar: Textblöcke dürfen nicht für das Blatt gehalten werden.
+        let ppm = 100 / 25.4
+        let w = 850, h = Int(297 * ppm)
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(red: 0.98, green: 0.98, blue: 0.98, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        for i in 0..<45 {
+            ctx.fill(CGRect(x: 80 + (i % 4 == 0 ? 30 : 0), y: 60 + i * 22, width: 600, height: 8))
+        }
+        let out = PageProcessor.cropAndDeskew(ctx.makeImage()!)
+        XCTAssertGreaterThan(out.width, w - 40)
+        XCTAssertGreaterThan(out.height, h - 40)
     }
 
     // MARK: Zuschnitt und Entzerrung
@@ -214,6 +275,15 @@ final class PageProcessorTests: XCTestCase {
         XCTAssertFalse(PageProcessor.hasColor(scan))
     }
 
+    func testTextOnPaleYellowPaperIsNotColor() {
+        let yellow: (CGFloat, CGFloat, CGFloat) = (250.0 / 255, 240.0 / 255, 190.0 / 255)
+        let text = Self.textLines(count: 30, width: 150)
+        XCTAssertFalse(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 0.8, blocks: text, paper: yellow)))
+        var withLogo = text
+        withLogo.append(Block(x: 150, y: 10, w: 40, h: 12, ink: .red))
+        XCTAssertTrue(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 0.8, blocks: withLogo, paper: yellow)))
+    }
+
     func testBlankPageIsNotColor() {
         XCTAssertFalse(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 1.0)))
     }
@@ -227,6 +297,28 @@ final class PageProcessorTests: XCTestCase {
         XCTAssertEqual(bw.bitsPerPixel, 1)
         XCTAssertEqual(bw.width, scan.width)
         XCTAssertEqual(bw.height, scan.height)
+    }
+
+    func testFadedThermalTextStaysBlack() {
+        // Grauer Text (Helligkeit etwa 178) auf weißem Bon: die Striche müssen schwarz bleiben.
+        let blocks = Self.textLines(count: 20, width: 56, ink: .faint)
+        let scan = Self.makeScan(paperMM: (80, 120), blocks: blocks)
+        let bw = PageProcessor.binarize(scan)
+        var buf = [UInt8](repeating: 0, count: bw.width * bw.height)
+        let ctx = CGContext(
+            data: &buf, width: bw.width, height: bw.height, bitsPerComponent: 8, bytesPerRow: bw.width,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        ctx.draw(bw, in: CGRect(x: 0, y: 0, width: bw.width, height: bw.height))
+        let ppm = 100 / 25.4
+        let left = (Double(scan.width) - 80 * ppm) / 2, top = (Double(scan.height) - 120 * ppm) / 2
+        var black = 0, total = 0
+        for i in 0..<20 {
+            // Mitte jedes Blocks, 1 mm Rand ausgenommen.
+            let y0 = Int(top + (12 + Double(i) * 5 + 0.5) * ppm), y1 = Int(top + (12 + Double(i) * 5 + 1.5) * ppm)
+            let x0 = Int(left + 14 * ppm), x1 = Int(left + 12 * ppm + 50 * ppm * (i % 3 == 2 ? 0.6 : 1.0) * 0.8)
+            for y in y0..<y1 { for x in x0..<max(x0 + 1, x1) { total += 1; if buf[y * bw.width + x] == 0 { black += 1 } } }
+        }
+        XCTAssertGreaterThan(Double(black) / Double(total), 0.95)
     }
 
     func testBinarizeKeepsInkBlackAndPaperWhite() {

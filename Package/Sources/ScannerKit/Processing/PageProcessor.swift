@@ -24,15 +24,19 @@ public enum PageProcessor {
     /// Gemessen an den Echtscans: Durchscheinen der Rückseite und der Thermo-Geisterdruck
     /// auf Bons liegen höchstens 30 Stufen unter Weiß; Text und Linien über 90 Stufen darunter.
     static let inkContrast = 40
-    /// Anteil Tinte an der Blattfläche, unter dem die Seite leer ist. Gemessen an den Echtscans:
-    /// leere Sechzehntel eines Blatts (Bon, Lieferschein) haben 0 bis 0,07 Prozent Tinte, die am
-    /// wenigsten bedruckte ganze Seite (Lieferschein) 3,9 Prozent. In den erzeugten Tests liegen
-    /// Rauschen und Kantenschatten bei 0 Prozent, drei Anschriftszeilen bei etwa 0,7 Prozent.
-    static let blankInkFraction = 0.0015
+    /// Anteil Tinte in einer Kachel (Blatt in 4 x 4 Kacheln), ab dem die Seite nicht leer ist.
+    /// Gemessen an den Echtscans: leere Kacheln (Bon, Lieferschein) haben 0 bis 0,07 Prozent
+    /// Tinte, in den erzeugten Leerseiten (Rauschen, Kantenschatten, Staub) bleiben sie unter
+    /// 0,02 Prozent. Eine Unterschrift oder ein Stempel füllt in einer Kachel mehr als 0,5 Prozent.
+    /// Pro Kachel statt über das ganze Blatt, damit wenig Inhalt an einer Stelle nicht im
+    /// Mittel über die Seite untergeht.
+    static let blankTileInkFraction = 0.003
+    static let blankTiles = 4
     /// Eine leere Seite muss hell sein; ein komplett schwarzes Blatt ist nicht leer.
     static let blankMinPaperLuma = 150
 
-    /// Farbig ist ein Pixel, dessen Kanäle um mindestens so viel auseinanderliegen. Das Papier hat
+    /// Farbig ist ein Pixel, dessen Kanäle (bezogen auf die Papierfarbe, auf 255 normiert) um
+    /// mindestens so viel auseinanderliegen. Das Papier hat
     /// 4 bis 12 (Blaustich), Farbsäume an schwarzem Text bleiben nach dem Verkleinern unter 30,
     /// das rote Logo des Lieferscheins liegt bei über 100.
     static let colorChroma = 45
@@ -44,9 +48,10 @@ public enum PageProcessor {
     static let marginFraction = 0.015
 
     /// 1 Bit: schwarz ist ein Pixel, das dunkler als dieser Anteil des lokalen Mittels ist.
-    /// Das Mittel eines weißen Blatts mit Text liegt bei 235 bis 245; 0,75 davon sind etwa 180 und
-    /// lassen den Geisterdruck (205 bis 225) weiß.
-    static let binarizeRatio = 0.75
+    /// Als Papierhelligkeit gilt das Mittel der Pixel einer Zelle, die heller als das Zellmittel sind;
+    /// so drückt dichter Text das Niveau nicht. Es liegt bei einem weißen Blatt bei 235 bis 250;
+    /// 0,78 davon sind etwa 195: verblasster Thermodruck (Helligkeit 160 bis 190) bleibt schwarz, der Geisterdruck (205 bis 225) weiß.
+    static let binarizeRatio = 0.78
     /// Unter dieser Helligkeit ist ein Pixel in jedem Fall schwarz.
     static let binarizeHardBlack = 70
     /// Kantenlänge der Zellen, aus denen das lokale Mittel entsteht (Pixel).
@@ -59,10 +64,11 @@ public enum PageProcessor {
     /// Wahr, wenn auf dem Blatt (ohne Rand und Hintergrund) praktisch nichts gedruckt ist.
     public static func isBlank(_ image: CGImage) -> Bool {
         guard let region = PageRegion(image) else { return false }
+        let a = region.analysis
         var hist = [Int](repeating: 0, count: 256)
         var n = 0
-        region.forEachPixel { y, x in
-            hist[Int(region.analysis.luma[y * region.analysis.width + x])] += 1
+        region.forEachPixel { y, x, _, _ in
+            hist[Int(a.luma[y * a.width + x])] += 1
             n += 1
         }
         guard n > 0 else { return false }
@@ -74,9 +80,18 @@ public enum PageProcessor {
         }
         guard paper >= blankMinPaperLuma else { return false }
         let limit = paper - inkContrast
-        var ink = 0
-        for v in 0..<max(0, limit) { ink += hist[v] }
-        return Double(ink) / Double(n) < blankInkFraction
+        let t = blankTiles
+        var ink = [Int](repeating: 0, count: t * t)
+        var count = [Int](repeating: 0, count: t * t)
+        region.forEachPixel { y, x, fu, fv in
+            let k = min(t - 1, Int(fv * Double(t))) * t + min(t - 1, Int(fu * Double(t)))
+            count[k] += 1
+            if Int(a.luma[y * a.width + x]) < limit { ink[k] += 1 }
+        }
+        for k in 0..<(t * t) where count[k] > 0 {
+            if Double(ink[k]) / Double(count[k]) >= blankTileInkFraction { return false }
+        }
+        return true
     }
 
     // MARK: Farbe
@@ -84,15 +99,35 @@ public enum PageProcessor {
     /// Wahr, wenn ein nennenswerter Teil des Blatts farbig ist.
     public static func hasColor(_ image: CGImage) -> Bool {
         guard let region = PageRegion(image) else { return false }
-        var colored = 0, n = 0
-        let px = region.analysis.rgba
-        region.forEachPixel { y, x in
-            let i = (y * region.analysis.width + x) * 4
-            let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
-            if max(r, g, b) - min(r, g, b) >= colorChroma { colored += 1 }
+        let a = region.analysis
+        let px = a.rgba
+        // Papierfarbe: 90. Perzentil je Kanal. Ein dunkles Blatt hat keine Papierfarbe, dann gilt Weiß.
+        var hist = [[Int]](repeating: [Int](repeating: 0, count: 256), count: 3)
+        var n = 0
+        region.forEachPixel { y, x, _, _ in
+            let i = (y * a.width + x) * 4
+            for c in 0..<3 { hist[c][Int(px[i + c])] += 1 }
             n += 1
         }
         guard n > 0 else { return false }
+        var paper = [Int](repeating: 255, count: 3)
+        for c in 0..<3 {
+            var cum = 0
+            for v in 0..<256 {
+                cum += hist[c][v]
+                if cum * 10 >= n * 9 { paper[c] = max(v, 1); break }
+            }
+        }
+        if (paper[0] + paper[1] + paper[2]) / 3 < blankMinPaperLuma { paper = [255, 255, 255] }
+        var colored = 0
+        region.forEachPixel { y, x, _, _ in
+            let i = (y * a.width + x) * 4
+            // Auf die Papierfarbe bezogen: Text auf getöntem Papier behält gleiche Anteile je Kanal.
+            let r = min(255, Int(px[i]) * 255 / paper[0])
+            let g = min(255, Int(px[i + 1]) * 255 / paper[1])
+            let b = min(255, Int(px[i + 2]) * 255 / paper[2])
+            if max(r, g, b) - min(r, g, b) >= colorChroma { colored += 1 }
+        }
         return Double(colored) / Double(n) >= colorFraction
     }
 
@@ -175,6 +210,19 @@ public enum PageProcessor {
                 }
             }
         }
+        // Papierniveau: nur Pixel über dem Zellmittel zählen, damit dichter (heller) Text es nicht senkt.
+        var paperSum = [Double](repeating: 0, count: gw * gh)
+        var paperCnt = [Double](repeating: 0, count: gw * gh)
+        gray.withUnsafeBufferPointer { g in
+            for y in 0..<h {
+                let gy = y / cell
+                for x in 0..<w {
+                    let i = gy * gw + x / cell
+                    if Double(g[y * w + x]) * cnt[i] >= sum[i] { paperSum[i] += Double(g[y * w + x]); paperCnt[i] += 1 }
+                }
+            }
+        }
+        for i in 0..<(gw * gh) where paperCnt[i] > 0 { sum[i] = paperSum[i]; cnt[i] = paperCnt[i] }
         var smooth = [Double](repeating: 0, count: gw * gh)
         let r = binarizeSmoothCells
         for gy in 0..<gh {
@@ -237,7 +285,7 @@ struct PageRegion {
         inset = max(3, shorter * PageProcessor.marginFraction)
     }
 
-    func forEachPixel(_ body: (_ y: Int, _ x: Int) -> Void) {
+    func forEachPixel(_ body: (_ y: Int, _ x: Int, _ fu: Double, _ fv: Double) -> Void) {
         let w = analysis.width, h = analysis.height
         if let rect {
             // Nur den umschließenden Kasten des gedrehten Rechtecks absuchen.
@@ -247,13 +295,18 @@ struct PageRegion {
             let y0 = max(0, Int(rect.cy - halfY)), y1 = min(h - 1, Int(rect.cy + halfY) + 1)
             for y in y0...y1 {
                 for x in x0...x1 where rect.contains(x: Double(x) + 0.5, y: Double(y) + 0.5, inset: inset) {
-                    body(y, x)
+                    let dx = Double(x) + 0.5 - rect.cx, dy = Double(y) + 0.5 - rect.cy
+                    let u = dx * cos(rect.angle) + dy * sin(rect.angle)
+                    let v = -dx * sin(rect.angle) + dy * cos(rect.angle)
+                    body(y, x, (u + rect.width / 2) / rect.width, (v + rect.height / 2) / rect.height)
                 }
             }
         } else {
             let m = Int(inset)
             guard w > 2 * m, h > 2 * m else { return }
-            for y in m..<(h - m) { for x in m..<(w - m) { body(y, x) } }
+            for y in m..<(h - m) {
+                for x in m..<(w - m) { body(y, x, Double(x) / Double(w), Double(y) / Double(h)) }
+            }
         }
     }
 }

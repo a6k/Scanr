@@ -15,24 +15,17 @@ nonisolated struct ResultMessage: Equatable, Sendable {
 
     init(_ result: ScanResult) {
         files = result.files
-        let saved = Self.count(result.files.count, "Datei", "Dateien")
         if result.cancelled {
             title = "Scan abgebrochen"
-            body = result.files.isEmpty ? "Abgebrochen, nichts gespeichert" : "Abgebrochen, \(saved) gespeichert"
+            body = Self.cancelledBody(result)
         } else if let error = result.error {
-            let problem = Self.describe(error)
+            let problem = Self.stop(error, result)
             if result.files.isEmpty {
                 title = "Scan fehlgeschlagen"
-                body = switch error {
-                case .scanner(.noDocuments): problem
-                case .scanner(.protocolViolation): "Übertragungsfehler, nichts gespeichert. Bitte erneut versuchen"
-                default: "\(problem), nichts gespeichert"
-                }
+                body = error == .scanner(.noDocuments) && result.sheets == 0 ? problem : "\(problem), nichts gespeichert"
             } else {
-                let place = result.files.count == 1 ? result.files[0].lastPathComponent : saved
                 title = "Scan unvollständig"
-                body = "\(problem) nach Seite \(result.pages). "
-                    + "\(Self.count(result.pages, "Seite", "Seiten")) gespeichert in \(place)"
+                body = "\(problem). \(Self.saved(result))"
             }
         } else if result.files.isEmpty {
             title = "Nichts gespeichert"
@@ -40,12 +33,47 @@ nonisolated struct ResultMessage: Equatable, Sendable {
         } else {
             title = "Scan gespeichert"
             let first = result.files[0].lastPathComponent
-            body = result.files.count == 1 ? first : "\(saved), erste: \(first)"
+            body = result.files.count == 1 ? first : "\(Self.count(result.files.count, "Datei", "Dateien")), erste: \(first)"
         }
     }
 
     private static func count(_ n: Int, _ one: String, _ many: String) -> String {
         "\(n) \(n == 1 ? one : many)"
+    }
+
+    private static func cancelledBody(_ result: ScanResult) -> String {
+        if result.files.isEmpty {
+            if case .output(let e) = result.error { return "Abgebrochen. \(describe(e)), nichts gespeichert" }
+            return "Abgebrochen, nichts gespeichert"
+        }
+        if result.files.count == 1 {
+            return "Abgebrochen, \(count(result.pages, "Seite", "Seiten")) gespeichert in \(result.files[0].lastPathComponent)"
+        }
+        return "Abgebrochen, \(count(result.files.count, "Datei", "Dateien")) gespeichert"
+    }
+
+    /// Was den Stapel beendet hat. Fehler am Papier nennen das Blatt, an dem es hing; andere
+    /// Fehler nur, wenn schon etwas gelesen war.
+    private static func stop(_ error: ScanJobError, _ result: ScanResult) -> String {
+        guard case .scanner(let e) = error else { return describe(error) }
+        let name = if case .protocolViolation = e { "Übertragungsfehler" } else { describe(e) }
+        let atSheet: Bool = switch e {
+        case .doubleFeed, .paperJam, .coverOpen, .protocolViolation: true
+        default: result.sheets > 0 || !result.files.isEmpty
+        }
+        return atSheet ? "\(name) bei Blatt \(result.sheets + 1)" : name
+    }
+
+    /// „Blatt 1 bis 2 gespeichert (3 Seiten) in …“
+    private static func saved(_ result: ScanResult) -> String {
+        let place = result.files.count == 1
+            ? result.files[0].lastPathComponent : count(result.files.count, "Datei", "Dateien")
+        let pages = count(result.pages, "Seite", "Seiten")
+        return switch result.sheets {
+        case 0: "\(pages) gespeichert in \(place)"
+        case 1: "Blatt 1 gespeichert (\(pages)) in \(place)"
+        default: "Blatt 1 bis \(result.sheets) gespeichert (\(pages)) in \(place)"
+        }
     }
 
     static func describe(_ error: ScanJobError) -> String {

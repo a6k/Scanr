@@ -9,25 +9,37 @@ public enum ScanJobError: Error, Equatable, Sendable {
     case output(OutputError)
 }
 
+/// Fortschritt eines Durchlaufs.
+public enum ScanProgress: Equatable, Sendable {
+    /// Nach jeder behaltenen Seite: so viele Seiten stehen im Ergebnis (Leerseiten zählen nicht).
+    case scanned(pages: Int)
+    /// Der Scanner ist fertig, die Texterkennung beginnt mit Seite `page` von `of`. Nur bei PDF.
+    case recognizing(page: Int, of: Int)
+}
+
 /// Ergebnis eines Durchlaufs.
 public struct ScanResult: Sendable {
     /// Geschriebene Dateien, bei JPG eine je Seite.
     public let files: [URL]
     /// Seiten, die in den Dateien stehen (ohne entfernte Leerseiten).
     public let pages: Int
+    /// Vollständig gelesene Blätter, deren Seiten alle im Ergebnis stehen oder als Leerseite
+    /// entfallen sind. Ein Fehler betrifft das Blatt danach.
+    public let sheets: Int
     /// Der Fehler, den die Oberfläche nennen soll. Ein Schreibfehler hat Vorrang, wenn danach
     /// keine Datei vorliegt (PDF), sonst steht hier der Scannerfehler.
     public let error: ScanJobError?
     /// Der Scannerfehler, der den Stapel beendet hat, auch wenn `error` ein Schreibfehler ist.
     public let scannerError: ScannerError?
-    /// Der Durchlauf wurde abgebrochen. Bereits geschriebene JPGs bleiben in `files`; eine PDF
-    /// wird bei Abbruch nicht geschrieben.
+    /// Der Durchlauf wurde abgebrochen. Was bis dahin gescannt war, steht in `files`: bei JPG die
+    /// fertigen Dateien, bei PDF eine Datei mit allen behaltenen Seiten.
     public let cancelled: Bool
 
-    public init(files: [URL], pages: Int, error: ScanJobError?, scannerError: ScannerError? = nil,
-                cancelled: Bool = false) {
+    public init(files: [URL], pages: Int, sheets: Int = 0, error: ScanJobError?,
+                scannerError: ScannerError? = nil, cancelled: Bool = false) {
         self.files = files
         self.pages = pages
+        self.sheets = sheets
         self.error = error
         self.scannerError = scannerError
         self.cancelled = cancelled
@@ -39,7 +51,8 @@ public struct ScanResult: Sendable {
 /// Jede Seite wird aufbereitet, sobald sie aus dem Scanner kommt, das Rohbild ist danach frei.
 /// Bei PDF bleiben nur die aufbereiteten Seiten im Speicher (1 Bit ist klein). Die Texterkennung
 /// läuft erst nach dem Scannen, Seite für Seite hintereinander: sie braucht Sekunden je Seite
-/// und würde sonst die Rohseiten im Puffer des Streams stauen.
+/// und würde sonst die Rohseiten im Puffer des Streams stauen. Den Beginn meldet
+/// `ScanProgress.recognizing`.
 public struct ScanJob: Sendable {
     /// So oft wird nach einem Namenskonflikt ein neuer Name erfragt.
     static let nameTries = 5
@@ -62,34 +75,40 @@ public struct ScanJob: Sendable {
         self.outputDir = outputDir
     }
 
-    /// Führt den Durchlauf aus. `progress` bekommt nach jeder behaltenen Seite die Zahl der
-    /// Seiten, die im Ergebnis stehen werden (Leerseiten zählen nicht).
+    /// Führt den Durchlauf aus und meldet den Fortschritt über `progress`.
     ///
-    /// Bei Abbruch stoppt der Scanner. Fertig geschriebene Dateien bleiben (JPG: alle bis dahin),
-    /// eine PDF entsteht nicht. Das Ergebnis trägt dann `cancelled == true`.
-    public func run(progress: @Sendable (Int) -> Void) async -> ScanResult {
+    /// Kehrt erst zurück, wenn der Scanner steht. Bei Abbruch stoppt der Scanner, die Seiten bis
+    /// dahin bleiben: JPGs sind schon geschrieben, eine PDF entsteht aus den behaltenen Seiten.
+    /// Läuft gerade die Texterkennung, bekommen nur die schon erkannten Seiten eine Textebene.
+    /// Das Ergebnis trägt dann `cancelled == true`.
+    public func run(progress: @Sendable (ScanProgress) -> Void) async -> ScanResult {
         var kept: [ProcessedPage] = []   // nur PDF
         var files: [URL] = []            // nur JPG
         var pageCount = 0
+        var sheets = 0
         var scanFailure: ScannerError?
         var outputFailure: OutputError?
+        let duplex = profile.scanSettings.duplex
+        let scan = session.start(profile.scanSettings)
 
         do {
-            for try await raw in session.run(profile.scanSettings) {
-                try Task.checkCancellation()
-                guard let page = Self.prepare(raw.image, profile: profile) else { continue }
-                switch profile.format {
-                case .pdf:
-                    kept.append(Self.compact(page, quality: profile.jpegQuality))
-                case .jpg:
-                    files.append(try writeJPEG(page))
+            for try await raw in scan.pages {
+                if Task.isCancelled { break }
+                if let page = Self.prepare(raw.image, profile: profile) {
+                    switch profile.format {
+                    case .pdf:
+                        kept.append(Self.compact(page, quality: profile.jpegQuality))
+                    case .jpg:
+                        files.append(try writeJPEG(page))
+                    }
+                    pageCount += 1
+                    progress(.scanned(pages: pageCount))
                 }
-                pageCount += 1
-                progress(pageCount)
+                // Das Blatt ist fertig, wenn seine letzte Seite durch ist, auch als Leerseite.
+                if !duplex || raw.side == .back { sheets = raw.sheet }
             }
-            try Task.checkCancellation()   // Abbruch beendet den Stream ohne Fehler
         } catch is CancellationError {
-            return cancelled(files)
+            // Abbruch, siehe unten.
         } catch let e as ScannerError {
             scanFailure = e
         } catch let e as OutputError {
@@ -97,21 +116,30 @@ public struct ScanJob: Sendable {
         } catch {
             scanFailure = .protocolViolation("\(error)")
         }
-        if scanFailure == nil && outputFailure == nil && Task.isCancelled { return cancelled(files) }
+        // Endet die Schleife vorzeitig (Abbruch, Schreibfehler), läuft der Scanner noch. Erst
+        // zurückkehren, wenn er gestoppt ist.
+        scan.producer.cancel()
+        await scan.producer.value
+        // Ein Fehler, den erst der Abbruch ausgelöst hat, zählt nicht.
+        if Task.isCancelled { scanFailure = nil }
 
         if profile.format == .pdf && !kept.isEmpty && outputFailure == nil {
             do {
-                files = [try await writePDF(kept)]
-            } catch is CancellationError {
-                return cancelled([])
-            } catch let e as OutputError {
-                outputFailure = e
-                pageCount = 0
+                files = [try await writePDF(kept, progress: progress)]
             } catch {
-                OutputFile.log.error("PDF nicht geschrieben: \(String(describing: error), privacy: .public)")
-                outputFailure = .cannotCreateFile
+                if let e = error as? OutputError {
+                    outputFailure = e
+                } else {
+                    OutputFile.log.error("PDF nicht geschrieben: \(String(describing: error), privacy: .public)")
+                    outputFailure = .cannotCreateFile
+                }
                 pageCount = 0
+                sheets = 0
             }
+        }
+        if Task.isCancelled {
+            return ScanResult(files: files, pages: pageCount, sheets: sheets,
+                              error: outputFailure.map { .output($0) }, cancelled: true)
         }
         // Ein Schreibfehler gewinnt, wenn nichts geschrieben wurde; der Scannerfehler bleibt in
         // `scannerError`. Mit geschriebener Datei zählt der Fehler, der den Stapel beendet hat.
@@ -122,11 +150,7 @@ public struct ScanJob: Sendable {
         } else {
             nil
         }
-        return ScanResult(files: files, pages: pageCount, error: error, scannerError: scanFailure)
-    }
-
-    private func cancelled(_ written: [URL]) -> ScanResult {
-        ScanResult(files: written, pages: written.count, error: nil, cancelled: true)
+        return ScanResult(files: files, pages: pageCount, sheets: sheets, error: error, scannerError: scanFailure)
     }
 
     /// Farb- und Graubilder sofort als JPEG kodieren (Qualität des Profils), damit sie bis zum
@@ -171,16 +195,17 @@ public struct ScanJob: Sendable {
         }
     }
 
-    private func writePDF(_ pages: [ProcessedPage]) async throws -> URL {
-        // Texterkennung nacheinander, vor der Namensfrage: so liegt zwischen Frage und Schreiben
-        // keine Wartezeit.
+    /// Texterkennung nacheinander, vor der Namensfrage: so liegt zwischen Frage und Schreiben
+    /// keine Wartezeit. Nach einem Abbruch beginnt keine weitere Erkennung, die übrigen Seiten
+    /// kommen ohne Textebene ins PDF.
+    private func writePDF(_ pages: [ProcessedPage], progress: @Sendable (ScanProgress) -> Void) async throws -> URL {
         var withText: [(ProcessedPage, [TextLine])] = []
-        for page in pages {
-            try Task.checkCancellation()
-            let lines = try await OCR.lines(in: page.image)
+        for (i, page) in pages.enumerated() {
+            var lines: [TextLine] = []
+            if !Task.isCancelled { progress(.recognizing(page: i + 1, of: pages.count)) }
+            if !Task.isCancelled { lines = try await OCR.lines(in: page.image) }
             withText.append((page, lines))
         }
-        try Task.checkCancellation()
         return try write(ext: "pdf") { url in
             try PDFComposer.write(withText, to: url, jpegQuality: profile.jpegQuality)
         }

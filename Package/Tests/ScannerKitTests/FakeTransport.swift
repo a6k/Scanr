@@ -47,6 +47,8 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
     var zeroPixelSize = false
     /// Kurze READs kommen ohne ILI und EOM (fehlerhaftes Gerät).
     var unflaggedShortReads = false
+    /// SCANNER CONTROL 04 (Abbruch) braucht so lange, auch in einem abgebrochenen Task.
+    var cancelDelay: Duration?
     private var fedSheets = 0
 
     var calls: [Call] { lock.withLock { log } }
@@ -57,6 +59,12 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
 
     func execute(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: Duration) async throws -> CommandResult {
         if cdb[0] == 0x28, let d = lock.withLock({ readDelay }) { try await Task.sleep(for: d) }
+        if cdb == Command.scannerControl(0x04), let d = lock.withLock({ cancelDelay }) {
+            let seconds = Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { c.resume() }
+            }
+        }
         return try lock.withLock { try respond(cdb, dataOut: dataOut, readLength: readLength) }
     }
 

@@ -88,6 +88,7 @@ final class ScanJobTests: XCTestCase {
         let result = await job(f, profile(.auto)).run { _ in }
         XCTAssertNil(result.error)
         XCTAssertEqual(result.pages, 3)
+        XCTAssertEqual(result.sheets, 2)
         XCTAssertEqual(result.files.map(\.lastPathComponent), ["scan 01.pdf"])
         XCTAssertEqual(names(), ["scan 01.pdf"], "keine Temp-Datei übrig")
         let doc = try XCTUnwrap(PDFDocument(url: result.files[0]))
@@ -113,6 +114,7 @@ final class ScanJobTests: XCTestCase {
         XCTAssertEqual(result.error, .scanner(.doubleFeed))
         XCTAssertFalse(result.cancelled)
         XCTAssertEqual(result.pages, 1)
+        XCTAssertEqual(result.sheets, 1)
         XCTAssertEqual(names(), ["scan 01.pdf"])
         XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 1)
     }
@@ -174,12 +176,54 @@ final class ScanJobTests: XCTestCase {
         XCTAssertEqual(result.files.map(\.lastPathComponent), ["scan 01.jpg", "scan 02.jpg"])
     }
 
-    func testProgressCountsKeptPages() async {
+    func testProgressCountsKeptPagesThenReportsTextRecognition() async {
         let f = fake([sheet(front: text(["Eins"]), back: blank), sheet(front: text(["Zwei"]), back: blank)])
-        let seen = Locked<[Int]>([])
-        _ = await job(f, profile(.auto)).run { n in seen.withLock { $0.append(n) } }
-        XCTAssertEqual(seen.value.last, 2)
-        XCTAssertEqual(seen.value, seen.value.sorted())
+        let seen = Locked<[ScanProgress]>([])
+        _ = await job(f, profile(.auto)).run { p in seen.withLock { $0.append(p) } }
+        XCTAssertEqual(seen.value, [.scanned(pages: 1), .scanned(pages: 2),
+                                    .recognizing(page: 1, of: 2), .recognizing(page: 2, of: 2)])
+    }
+
+    func testJPGHasNoTextRecognitionPhase() async {
+        let f = fake([sheet(front: text(["Eins"]), back: blank)])
+        let seen = Locked<[ScanProgress]>([])
+        _ = await job(f, profile(.auto) { $0.format = .jpg }).run { p in seen.withLock { $0.append(p) } }
+        XCTAssertEqual(seen.value, [.scanned(pages: 1)])
+    }
+
+    // MARK: Blätter
+
+    func testDuplexSheetWithRemovedBlankBackCountsAsComplete() async throws {
+        let f = fake([
+            sheet(front: text(["Blatt eins"]), back: blank),
+            sheet(front: text(["Blatt zwei"]), back: text(["Rueckseite zwei"])),
+            sheet(front: text(["Blatt drei"]), back: blank),
+        ])
+        f.objectPositionError = [3: .doubleFeed]
+        let result = await job(f, profile(.auto)).run { _ in }
+        XCTAssertEqual(result.error, .scanner(.doubleFeed))
+        XCTAssertEqual(result.sheets, 2)
+        XCTAssertEqual(result.pages, 3)
+        XCTAssertEqual(PDFDocument(url: try XCTUnwrap(result.files.first))?.pageCount, 3)
+    }
+
+    func testSheetWithOnlyBlankPagesCounts() async {
+        let f = fake([sheet(front: blank, back: blank), sheet(front: blank, back: blank)])
+        f.objectPositionError = [2: .paperJam]
+        let result = await job(f, profile(.auto)).run { _ in }
+        XCTAssertEqual(result.error, .scanner(.paperJam))
+        XCTAssertEqual(result.sheets, 1)
+        XCTAssertEqual(result.pages, 0)
+        XCTAssertTrue(result.files.isEmpty)
+    }
+
+    func testDoubleFeedOnFirstSheetHasNoCompleteSheet() async {
+        let f = fake([sheet(front: text(["Eins"]), back: blank)])
+        f.objectPositionError = [1: .doubleFeed]
+        let result = await job(f, profile(.auto)).run { _ in }
+        XCTAssertEqual(result.error, .scanner(.doubleFeed))
+        XCTAssertEqual(result.sheets, 0)
+        XCTAssertTrue(result.files.isEmpty)
     }
 
     // MARK: Farbmodus
@@ -258,40 +302,76 @@ final class ScanJobTests: XCTestCase {
         f.calls.map(FakeTransport.label).filter { $0.hasPrefix("OBJECT POSITION") }.count
     }
 
-    func testCancelAfterFirstPageStopsScannerAndWritesNoPDF() async throws {
+    /// Startet den Durchlauf in einem Task, den `cancelWhen` aus dem Fortschritt heraus abbricht.
+    private func runCancelling(_ j: ScanJob, when cancelWhen: @escaping @Sendable (ScanProgress) -> Bool) async -> ScanResult {
+        let box = Locked<Task<ScanResult, Never>?>(nil)
+        let task = Task { await j.run { p in if cancelWhen(p) { box.withLock { $0 }?.cancel() } } }
+        box.withLock { $0 = task }
+        return await task.value
+    }
+
+    func testCancelAfterFirstPageStopsScannerAndSavesThePDF() async throws {
         let sheetCount = 6
         let f = fake((0..<sheetCount).map { _ in sheet(front: text(["Seite"]), back: blank) })
         f.readDelay = .milliseconds(10)
-        let j = job(f, profile(.auto))
-        let box = Locked<Task<ScanResult, Never>?>(nil)
-        let task = Task { await j.run { _ in box.withLock { $0 }?.cancel() } }
-        box.withLock { $0 = task }
-        let result = await task.value
+        let result = await runCancelling(job(f, profile(.auto))) { _ in true }
         XCTAssertTrue(result.cancelled)
         XCTAssertNil(result.error)
-        XCTAssertTrue(result.files.isEmpty)
-        XCTAssertEqual(result.pages, 0)
-        XCTAssertEqual(names(), [])
-        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(result.files.map(\.lastPathComponent), ["scan 01.pdf"])
+        XCTAssertEqual(result.pages, 1)
+        XCTAssertEqual(names(), ["scan 01.pdf"])
+        let doc = try XCTUnwrap(PDFDocument(url: result.files[0]))
+        XCTAssertEqual(doc.pageCount, 1)
+        XCTAssertTrue((doc.string ?? "").isEmpty, "ohne Texterkennung: \(doc.string ?? "")")
         // Nur Abbruch erklärt das: nicht alle Blätter wurden eingezogen (sonst sheetCount + 1).
         XCTAssertLessThan(positions(f), sheetCount)
         XCTAssertEqual(f.calls.map(FakeTransport.label).last, "SCANNER CONTROL 04")
+    }
+
+    func testRunReturnsOnlyAfterTheScannerWasStopped() async {
+        let f = fake((0..<6).map { _ in sheet(front: text(["Seite"]), back: blank) })
+        f.readDelay = .milliseconds(10)
+        f.cancelDelay = .milliseconds(200)
+        let result = await runCancelling(job(f, profile(.auto) { $0.format = .jpg })) { _ in true }
+        XCTAssertTrue(result.cancelled)
+        XCTAssertEqual(f.calls.map(FakeTransport.label).last, "SCANNER CONTROL 04")
+    }
+
+    func testCancelBeforeAnyPageWritesNothing() async {
+        let f = fake([sheet(front: blank, back: blank), sheet(front: text(["Seite"]), back: blank)])
+        f.readDelay = .milliseconds(10)
+        let j = job(f, profile(.auto))
+        let task = Task { await j.run { _ in } }
+        task.cancel()
+        let result = await task.value
+        XCTAssertTrue(result.cancelled)
+        XCTAssertTrue(result.files.isEmpty)
+        XCTAssertEqual(result.pages, 0)
+        XCTAssertEqual(names(), [])
+    }
+
+    func testCancelDuringTextRecognitionKeepsTextOfFinishedPages() async throws {
+        let f = fake([sheet(front: text(["Rechnung 4711"]), back: blank),
+                      sheet(front: text(["Lieferschein 99"]), back: blank)])
+        let result = await runCancelling(job(f, profile(.auto))) { $0 == .recognizing(page: 2, of: 2) }
+        XCTAssertTrue(result.cancelled)
+        XCTAssertEqual(result.pages, 2)
+        XCTAssertEqual(result.sheets, 2)
+        let doc = try XCTUnwrap(PDFDocument(url: try XCTUnwrap(result.files.first)))
+        XCTAssertEqual(doc.pageCount, 2)
+        XCTAssertFalse(doc.findString("Rechnung", withOptions: []).isEmpty, "Seite 1 behält ihren Text")
+        XCTAssertTrue((doc.page(at: 1)?.string ?? "").isEmpty, "Seite 2 ohne Texterkennung")
     }
 
     func testCancelKeepsJPGsAlreadyWritten() async throws {
         let sheetCount = 6
         let f = fake((0..<sheetCount).map { _ in sheet(front: text(["Seite"]), back: blank) })
         f.readDelay = .milliseconds(10)
-        let j = job(f, profile(.auto) { $0.format = .jpg })
-        let box = Locked<Task<ScanResult, Never>?>(nil)
-        let task = Task { await j.run { _ in box.withLock { $0 }?.cancel() } }
-        box.withLock { $0 = task }
-        let result = await task.value
+        let result = await runCancelling(job(f, profile(.auto) { $0.format = .jpg })) { _ in true }
         XCTAssertTrue(result.cancelled)
         XCTAssertEqual(result.files.map(\.lastPathComponent), ["scan 01.jpg"])
         XCTAssertEqual(result.pages, 1)
         XCTAssertEqual(names(), ["scan 01.jpg"], "fertige Datei bleibt")
-        try await Task.sleep(for: .milliseconds(300))
         XCTAssertLessThan(positions(f), sheetCount)
     }
 

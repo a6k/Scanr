@@ -26,7 +26,7 @@ protocol ResultNotifier {
 struct ScannerEnvironment {
     typealias JobRunner = @Sendable (
         _ transport: any USBTransport, _ profile: ScanProfile, _ namer: FileNamer, _ outputDirectory: URL,
-        _ progress: @escaping @Sendable (Int) -> Void
+        _ progress: @escaping @Sendable (ScanProgress) -> Void
     ) async -> ScanResult
 
     var defaults: UserDefaults
@@ -60,6 +60,8 @@ final class ScannerController {
         case ready
         case busy
         case scanning(page: Int)
+        /// Der Scanner ist fertig, die Texterkennung für das PDF läuft. Abbrechen geht weiterhin.
+        case recognizing
         case failed(String)
     }
 
@@ -166,8 +168,8 @@ final class ScannerController {
         let runJob = environment.runJob
         state = .scanning(page: 0)
         scanTask = Task {
-            let result = await runJob(transport, profile, namer, dir) { page in
-                Task { @MainActor in self.showProgress(page) }
+            let result = await runJob(transport, profile, namer, dir) { progress in
+                Task { @MainActor in self.showProgress(progress) }
             }
             finish(result)
         }
@@ -177,9 +179,16 @@ final class ScannerController {
         scanTask?.cancel()
     }
 
-    private func showProgress(_ page: Int) {
-        guard case .scanning(let shown) = state, page > shown else { return }
-        state = .scanning(page: page)
+    /// Nur während des Durchlaufs; eine Meldung, die nach `finish` ankommt, fällt weg.
+    private func showProgress(_ progress: ScanProgress) {
+        switch (state, progress) {
+        case (.scanning(let shown), .scanned(let pages)) where pages > shown:
+            state = .scanning(page: pages)
+        case (.scanning, .recognizing):
+            state = .recognizing
+        default:
+            break
+        }
     }
 
     private func finish(_ result: ScanResult) {

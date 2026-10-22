@@ -44,6 +44,7 @@ extension ScannerController.State {
         case .ready: "Bereit"
         case .busy: "Scanner beschäftigt"
         case .scanning(let page): page == 0 ? "Scannt" : "Scannt, Seite \(page)"
+        case .recognizing: "Texterkennung …"
         case .failed(let message): "Fehler: \(message)"
         }
     }

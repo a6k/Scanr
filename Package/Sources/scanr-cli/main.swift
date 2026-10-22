@@ -215,9 +215,14 @@ case "job":
     do {
         let job = ScanJob(transport: try IOUSBHostTransport.open(), profile: profile, namer: FileNamer(), outputDir: dir)
         setvbuf(stdout, nil, _IOLBF, 0)
-        let result = await job.run { print("\($0) Seiten") }
+        let result = await job.run { progress in
+            switch progress {
+            case .scanned(let pages): print("\(pages) Seiten")
+            case .recognizing(let page, let total): print("Texterkennung \(page) von \(total)")
+            }
+        }
         for file in result.files { print("geschrieben: \(file.path)") }
-        print("\(result.pages) Seiten in \(result.files.count) Datei(en)")
+        print("\(result.pages) Seiten aus \(result.sheets) Blättern in \(result.files.count) Datei(en)")
         if result.cancelled { print("Abgebrochen.") }
         if case .output = result.error, let scanError = result.scannerError {
             FileHandle.standardError.write(Data(("Zuvor: " + message(scanError) + "\n").utf8))

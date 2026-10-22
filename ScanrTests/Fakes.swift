@@ -107,7 +107,10 @@ final class FakeJobs: @unchecked Sendable {
     private var released = false
     var hold = false
     var result = ScanResult(files: [], pages: 0, error: nil)
+    var cancelledResult = ScanResult(files: [], pages: 0, error: nil, cancelled: true)
     var pagesToReport = 0
+    /// Nach den Seiten die Texterkennung melden.
+    var reportRecognizing = false
 
     var profiles: [ScanProfile] { lock.withLock { started } }
 
@@ -121,9 +124,10 @@ final class FakeJobs: @unchecked Sendable {
     }
 
     func run(_ transport: any USBTransport, _ profile: ScanProfile, _ namer: FileNamer, _ dir: URL,
-             _ progress: @escaping @Sendable (Int) -> Void) async -> ScanResult {
+             _ progress: @escaping @Sendable (ScanProgress) -> Void) async -> ScanResult {
         lock.withLock { started.append(profile) }
-        for n in stride(from: 1, through: pagesToReport, by: 1) { progress(n) }
+        for n in stride(from: 1, through: pagesToReport, by: 1) { progress(.scanned(pages: n)) }
+        if reportRecognizing { progress(.recognizing(page: 1, of: max(1, pagesToReport))) }
         if hold {
             await withTaskCancellationHandler {
                 await withCheckedContinuation { cont in
@@ -137,7 +141,7 @@ final class FakeJobs: @unchecked Sendable {
             } onCancel: {
                 self.release()
             }
-            if Task.isCancelled { return ScanResult(files: [], pages: 0, error: nil, cancelled: true) }
+            if Task.isCancelled { return cancelledResult }
         }
         return result
     }

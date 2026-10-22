@@ -34,20 +34,33 @@ public final class ScanSession: Sendable {
         self.emptyReadPause = emptyReadPause
     }
 
+    /// Ein laufender Stapel: die Seiten und der Task, der den Scanner bedient.
+    public struct Run: Sendable {
+        public let pages: AsyncThrowingStream<RawPage, Error>
+        /// Endet erst, wenn der Scanner gestoppt ist (SCANNER CONTROL 04 nach Abbruch oder Fehler).
+        /// Abbrechen stoppt den Stapel.
+        public let producer: Task<Void, Never>
+    }
+
     /// Scannt alle Blätter im Einzug. Ein leerer Einzug zu Beginn endet mit `.noDocuments`;
     /// läuft der Einzug nach dem ersten Blatt leer, endet der Stream normal.
     public func run(_ settings: ScanSettings) -> AsyncThrowingStream<RawPage, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await self.scanBatch(settings) { continuation.yield($0) }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+        start(settings).pages
+    }
+
+    /// Wie `run`, gibt aber den Task mit zurück. Wer auf ihn wartet, weiß, dass der Scanner steht.
+    public func start(_ settings: ScanSettings) -> Run {
+        let (pages, continuation) = AsyncThrowingStream<RawPage, Error>.makeStream()
+        let task = Task {
+            do {
+                try await self.scanBatch(settings) { continuation.yield($0) }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
             }
-            continuation.onTermination = { _ in task.cancel() }
         }
+        continuation.onTermination = { _ in task.cancel() }
+        return Run(pages: pages, producer: task)
     }
 
     // MARK: Stapel

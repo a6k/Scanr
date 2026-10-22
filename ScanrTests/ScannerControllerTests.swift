@@ -222,6 +222,26 @@ struct ScannerControllerTests {
         #expect(c.state == .ready)
     }
 
+    @Test func textRecognitionIsShownAndCanBeCancelled() async {
+        let rig = Rig { clock in FakeOpener([.success(FakeTransport([.status(button: true)], clock: clock))]) }
+        rig.jobs.hold = true
+        rig.jobs.pagesToReport = 2
+        rig.jobs.reportRecognizing = true
+        let pdf = URL(fileURLWithPath: "/tmp/2026-10-22 scan 01.pdf")
+        rig.jobs.cancelledResult = ScanResult(files: [pdf], pages: 2, sheets: 2, error: nil, cancelled: true)
+        let c = rig.controller()
+
+        _ = await c.step()
+
+        #expect(await eventually { c.state == .recognizing })
+        #expect(c.state.text == "Texterkennung …")
+        #expect(c.isScanning, "Menü zeigt weiter „Scan abbrechen“")
+        c.cancelScan()
+        await c.scanTask?.value
+        #expect(c.state == .ready)
+        #expect(rig.notifier.posted.map(\.body) == ["Abgebrochen, 2 Seiten gespeichert in 2026-10-22 scan 01.pdf"])
+    }
+
     @Test func finishedScanPostsTheFileName() async {
         let rig = Rig { clock in FakeOpener([.success(FakeTransport([.status(button: true)], clock: clock))]) }
         let file = URL(fileURLWithPath: "/tmp/2026-10-22 scan 01.pdf")

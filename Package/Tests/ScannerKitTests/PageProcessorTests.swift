@@ -288,6 +288,35 @@ final class PageProcessorTests: XCTestCase {
         XCTAssertFalse(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 1.0)))
     }
 
+    // MARK: Bereits zugeschnitten
+
+    /// Zugeschnittenes Blatt ohne Hintergrund: weiß, mit einer hellgrauen Bahn über die ganze
+    /// Höhe (wie ein großes Foto oder ein Farbfeld) und einer roten Marke im linken Rand.
+    /// Die Papiersuche kann die Bahn für das Blatt halten und die Marke außerhalb liegen lassen.
+    static func croppedPageWithBand() -> CGImage {
+        let w = 800, h = 1100
+        let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(red: 0.90, green: 0.90, blue: 0.90, alpha: 1)
+        ctx.fill(CGRect(x: 250, y: 0, width: 300, height: h))
+        ctx.setFillColor(red: 0.85, green: 0.1, blue: 0.1, alpha: 1)
+        ctx.fill(CGRect(x: 30, y: 500, width: 100, height: 100))
+        return ctx.makeImage()!
+    }
+
+    func testAlreadyCroppedSkipsSecondPaperSearch() {
+        let page = Self.croppedPageWithBand()
+        XCTAssertTrue(PageProcessor.hasColor(page, alreadyCropped: true), "Marke im Rand zählt")
+        XCTAssertFalse(PageProcessor.isBlank(page, alreadyCropped: true))
+        // Ohne den Hinweis hielt die Papiersuche die Bahn für das Blatt: die Seite galt als
+        // leer und farblos, die rote Marke lag außerhalb (beim Schreiben dieses Tests gemessen).
+        let region = PageRegion(page, detectPaper: false)
+        XCTAssertNil(region?.rect)
+    }
+
     // MARK: 1 Bit
 
     func testBinarizeProducesOneBitImage() {

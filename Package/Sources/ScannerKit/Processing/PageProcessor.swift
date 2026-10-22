@@ -62,8 +62,11 @@ public enum PageProcessor {
     // MARK: Leerseite
 
     /// Wahr, wenn auf dem Blatt (ohne Rand und Hintergrund) praktisch nichts gedruckt ist.
-    public static func isBlank(_ image: CGImage) -> Bool {
-        guard let region = PageRegion(image) else { return false }
+    /// - Parameter alreadyCropped: Das Bild kommt aus `cropAndDeskew`. Dann entfällt die zweite
+    ///   Papiersuche, die auf einem zugeschnittenen Blatt eine Bahn oder ein Foto im Blatt
+    ///   für das Papier halten und den Rest außer Acht lassen könnte.
+    public static func isBlank(_ image: CGImage, alreadyCropped: Bool = false) -> Bool {
+        guard let region = PageRegion(image, detectPaper: !alreadyCropped) else { return false }
         let a = region.analysis
         var hist = [Int](repeating: 0, count: 256)
         var n = 0
@@ -97,8 +100,9 @@ public enum PageProcessor {
     // MARK: Farbe
 
     /// Wahr, wenn ein nennenswerter Teil des Blatts farbig ist.
-    public static func hasColor(_ image: CGImage) -> Bool {
-        guard let region = PageRegion(image) else { return false }
+    /// - Parameter alreadyCropped: wie bei `isBlank`.
+    public static func hasColor(_ image: CGImage, alreadyCropped: Bool = false) -> Bool {
+        guard let region = PageRegion(image, detectPaper: !alreadyCropped) else { return false }
         let a = region.analysis
         let px = a.rgba
         // Papierfarbe: 90. Perzentil je Kanal. Ein dunkles Blatt hat keine Papierfarbe, dann gilt Weiß.
@@ -174,6 +178,20 @@ public enum PageProcessor {
         ctx.concatenate(CGAffineTransform(
             a: px.0 - o.0, b: px.1 - o.1, c: py.0 - o.0, d: py.1 - o.1, tx: o.0, ty: o.1))
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return ctx.makeImage() ?? image
+    }
+
+    // MARK: Grau
+
+    /// Wandelt in ein Graustufenbild mit 8 Bit je Pixel.
+    public static func grayscale(_ image: CGImage) -> CGImage {
+        let w = image.width, h = image.height
+        guard w > 0, h > 0,
+              let ctx = CGContext(
+                data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+        else { return image }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         return ctx.makeImage() ?? image
     }
 
@@ -277,10 +295,11 @@ struct PageRegion {
     let rect: PaperRect?
     let inset: Double
 
-    init?(_ image: CGImage) {
+    /// Mit `detectPaper == false` gilt das ganze Bild als Blatt (nur der Rand fällt weg).
+    init?(_ image: CGImage, detectPaper: Bool = true) {
         guard let a = PageAnalysis(image) else { return nil }
         analysis = a
-        rect = PaperDetector.detect(a)
+        rect = detectPaper ? PaperDetector.detect(a) : nil
         let shorter = rect.map { min($0.width, $0.height) } ?? Double(min(a.width, a.height))
         inset = max(3, shorter * PageProcessor.marginFraction)
     }

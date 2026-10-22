@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Prüfwerkzeug für den Scanner am USB. Nur für Entwicklung.
 func usage() -> Never {
-    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] --out <ordner>\n".utf8))
+    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] --out <ordner> | job --profile auto|foto [--out <ordner>]\n".utf8))
     exit(2)
 }
 
@@ -171,6 +171,39 @@ case "scan":
             print("\(name): \(page.image.width) x \(page.image.height) Pixel")
         }
         print("\(count) Seiten gespeichert in \(dir.path)")
+    } catch {
+        FileHandle.standardError.write(Data((message(error) + "\n").utf8))
+        exit(1)
+    }
+case "job":
+    var profileID: String?
+    var out: String?
+    var rest = args.dropFirst()
+    while let a = rest.popFirst() {
+        switch a {
+        case "--profile": profileID = rest.popFirst()
+        case "--out": out = rest.popFirst()
+        default: usage()
+        }
+    }
+    let profile: ScanProfile
+    switch profileID {
+    case "auto": profile = .auto
+    case "foto": profile = .foto
+    default: usage()
+    }
+    let dir = out.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+    do {
+        let job = ScanJob(transport: try IOUSBHostTransport.open(), profile: profile, namer: FileNamer(), outputDir: dir)
+        setvbuf(stdout, nil, _IOLBF, 0)
+        let result = await job.run { print("\($0) Seiten") }
+        for file in result.files { print("geschrieben: \(file.path)") }
+        print("\(result.pages) Seiten in \(result.files.count) Datei(en)")
+        if let error = result.error {
+            FileHandle.standardError.write(Data((message(error) + "\n").utf8))
+            exit(1)
+        }
     } catch {
         FileHandle.standardError.write(Data((message(error) + "\n").utf8))
         exit(1)

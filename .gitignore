@@ -5,3 +5,4 @@ xcuserdata/
 *.xcuserstate
 .superpowers/
 Local.xcconfig
+Release/

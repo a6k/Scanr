@@ -61,4 +61,21 @@ final class CommandsTests: XCTestCase {
         XCTAssertEqual(Command.sendDiagnostic(length: 16), [0x1D, 0, 0, 0, 16, 0])
         XCTAssertEqual(Command.sendDiagnostic(length: 0x0120), [0x1D, 0, 0, 0x01, 0x20, 0])
     }
+
+    func testInquiryVPD() {
+        // EVPD-Bit, Seite 0xF0, 204 Byte (INQUIRY_vpd_len).
+        XCTAssertEqual(Command.inquiryVPD(), [0x12, 0x01, 0xF0, 0, 204, 0])
+    }
+
+    func testModeSense() {
+        XCTAssertEqual(Command.modeSense(page: 0x3C), [0x1A, 0, 0x3C, 0, 0x14, 0])
+    }
+
+    func testScannerControlRIC() {
+        // RIC-Bit in Byte 1, Fenster-ID in Byte 2, Länge 3 Byte ab Offset 6.
+        XCTAssertEqual(Command.scannerControlRIC(length: 0x00FFF0, side: .back),
+                       [0xF1, 0x10, 0x80, 0, 0, 0, 0x00, 0xFF, 0xF0, 0])
+        XCTAssertEqual(Command.scannerControlRIC(length: 4, side: .front),
+                       [0xF1, 0x10, 0x00, 0, 0, 0, 0, 0, 4, 0])
+    }
 }

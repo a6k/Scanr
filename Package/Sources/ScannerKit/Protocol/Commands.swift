@@ -16,7 +16,9 @@ public enum ObjectPositionAction: UInt8, Sendable {
 /// die Nutzdaten kommen von den Aufrufern.
 public enum Command {
     /// Schreibt `value` big-endian in `count` Byte ab `offset` (`putnbyte`).
+    /// Werte, die nicht in `count` Byte passen, sind ein Programmierfehler und brechen ab.
     private static func put(_ cdb: inout [UInt8], at offset: Int, _ value: Int, bytes count: Int) {
+        precondition(value >= 0 && value < 1 << (8 * count), "Wert \(value) passt nicht in \(count) Byte")
         for i in 0..<count {
             cdb[offset + i] = UInt8((value >> (8 * (count - 1 - i))) & 0xFF)
         }
@@ -25,6 +27,16 @@ public enum Command {
     /// INQUIRY, Standardantwort mit 96 Byte (`INQUIRY_std_len`).
     public static func inquiry() -> [UInt8] {
         [0x12, 0, 0, 0, 96, 0]
+    }
+
+    /// INQUIRY mit EVPD-Bit (Byte 1 Bit 0), Seite 0xF0 und 204 Byte Antwort (`init_vpd`, `INQUIRY_vpd_len`).
+    public static func inquiryVPD() -> [UInt8] {
+        [0x12, 0x01, 0xF0, 0, 204, 0]
+    }
+
+    /// MODE SENSE(6) für eine Seite (Byte 2, untere 6 Bit) mit 0x14 Byte Antwort (`init_ms`, `MODE_SENSE_data_len`).
+    public static func modeSense(page: UInt8) -> [UInt8] {
+        [0x1A, 0, page & 0x3F, 0, 0x14, 0]
     }
 
     /// REQUEST SENSE, 18 Byte (`RS_return_size`).
@@ -47,6 +59,17 @@ public enum Command {
         cdb[0] = 0xF1
         cdb[1] = function & 0x0F
         cdb[2] = function >> 4
+        return cdb
+    }
+
+    /// SCANNER CONTROL mit RIC-Bit (Byte 1 Bit 4): fragt, ob `length` Byte Bilddaten der Seite
+    /// bereitliegen (`scanner_control_ric`). Fenster-ID in Byte 2, Länge 3 Byte ab Offset 6.
+    public static func scannerControlRIC(length: Int, side: ScanSide) -> [UInt8] {
+        var cdb = [UInt8](repeating: 0, count: 10)
+        cdb[0] = 0xF1
+        cdb[1] = 0x10
+        cdb[2] = side.rawValue
+        put(&cdb, at: 6, length, bytes: 3)
         return cdb
     }
 
@@ -77,12 +100,14 @@ public enum Command {
 
     /// MODE SELECT mit Page-Format-Bit (Byte 1, Bit 4) und Länge in Byte 4.
     public static func modeSelect(length: Int) -> [UInt8] {
-        [0x15, 0x10, 0, 0, UInt8(truncatingIfNeeded: length), 0]
+        precondition(length >= 0 && length <= 0xFF, "MODE SELECT: Länge \(length) passt nicht in ein Byte")
+        return [0x15, 0x10, 0, 0, UInt8(length), 0]
     }
 
     /// SCAN mit Anzahl der Fenster-IDs, die als Nutzdaten folgen (Byte 4).
     public static func scan(windows: Int) -> [UInt8] {
-        [0x1B, 0, 0, 0, UInt8(truncatingIfNeeded: windows), 0]
+        precondition(windows >= 0 && windows <= 0xFF, "SCAN: \(windows) Fenster passen nicht in ein Byte")
+        return [0x1B, 0, 0, 0, UInt8(windows), 0]
     }
 
     /// READ mit Datentyp (Byte 2, 0x00 Bilddaten), Fenster-ID für die Seite (Byte 5) und Länge (3 Byte ab Offset 6).

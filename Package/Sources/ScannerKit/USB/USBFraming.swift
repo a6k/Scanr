@@ -27,6 +27,25 @@ public enum USBFraming {
         Array(data.prefix(max(0, min(data.count, requested - remainder))))
     }
 
+    /// Bits aus den Sense-Daten, die auch bei Erfolg gesetzt sein können
+    /// (`get_RS_EOM`, `get_RS_ILI`, `get_RS_information` in `fujitsu-scsi.h`).
+    public struct SenseFlags: Equatable, Sendable {
+        public var eom: Bool
+        public var ili: Bool
+        /// Restlänge bei ILI (Byte 3 bis 6).
+        public var information: Int
+
+        public init(sense: [UInt8]) {
+            guard sense.count >= 7 else {
+                eom = false; ili = false; information = 0
+                return
+            }
+            eom = sense[2] & 0x40 != 0
+            ili = sense[2] & 0x20 != 0
+            information = Int(UInt32(sense[3]) << 24 | UInt32(sense[4]) << 16 | UInt32(sense[5]) << 8 | UInt32(sense[6]))
+        }
+    }
+
     /// Liest das Statusbyte (Offset 9) aus dem 13-Byte-Paket.
     public static func status(_ packet: [UInt8]) throws -> ScsiStatus {
         guard packet.count == statusLength else {

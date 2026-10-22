@@ -45,4 +45,20 @@ final class USBFramingTests: XCTestCase {
         XCTAssertEqual(USBFraming.truncate(Array(full.prefix(70)), requested: 100, remainder: 30).count, 70)
         XCTAssertEqual(USBFraming.truncate(full, requested: 100, remainder: 500).count, 0)
     }
+
+    func testSenseFlagsReadEomIliAndRemainder() {
+        var b = [UInt8](repeating: 0, count: 18)
+        b[2] = 0x60  // EOM und ILI, Sense-Key 0
+        b[3] = 0x00; b[4] = 0x01; b[5] = 0x00; b[6] = 0x10
+        let f = USBFraming.SenseFlags(sense: b)
+        XCTAssertTrue(f.eom)
+        XCTAssertTrue(f.ili)
+        XCTAssertEqual(f.information, 0x010010)
+        // Erfolg trotz EOM: keine Fehlerabbildung.
+        XCTAssertNil(ScannerError(sense: b))
+
+        b[2] = 0x20
+        XCTAssertEqual(USBFraming.SenseFlags(sense: b).eom, false)
+        XCTAssertEqual(USBFraming.SenseFlags(sense: b).ili, true)
+    }
 }

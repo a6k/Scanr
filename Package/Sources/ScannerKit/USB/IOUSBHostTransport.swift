@@ -74,6 +74,10 @@ public final class IOUSBHostTransport: USBTransport, @unchecked Sendable {
     // MARK: Befehl
 
     public func command(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: Duration) async throws -> [UInt8] {
+        try await execute(cdb, dataOut: dataOut, readLength: readLength, timeout: timeout).data
+    }
+
+    public func execute(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: Duration) async throws -> CommandResult {
         let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
         // Blockierende IORequests laufen auf einem Hintergrund-Thread, nicht im Cooperative Pool.
         return try await withCheckedThrowingContinuation { cont in
@@ -87,7 +91,7 @@ public final class IOUSBHostTransport: USBTransport, @unchecked Sendable {
         }
     }
 
-    private func commandSync(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: TimeInterval) throws -> [UInt8] {
+    private func commandSync(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: TimeInterval) throws -> CommandResult {
         lock.lock(); defer { lock.unlock() }
 
         try write(USBFraming.wrap(cdb), timeout: timeout)
@@ -101,7 +105,7 @@ public final class IOUSBHostTransport: USBTransport, @unchecked Sendable {
         let status = try USBFraming.status(try readExactStatus(timeout: timeout))
         switch status {
         case .good:
-            return data
+            return CommandResult(data: data)
         case .busy:
             throw ScannerError.busy
         case .checkCondition:
@@ -109,16 +113,13 @@ public final class IOUSBHostTransport: USBTransport, @unchecked Sendable {
             try write(USBFraming.wrap([0x03, 0, 0, 0, UInt8(Self.senseLength), 0]), timeout: timeout)
             let sense = try read(Self.senseLength, timeout: timeout)
             _ = try USBFraming.status(try readExactStatus(timeout: timeout))
-            guard let error = ScannerError(sense: sense) else {
-                // Sense-Key 0 mit EOM oder ILI: Befehl war erfolgreich, ILI meldet die Restlänge.
-                let ili = sense[2] & 0x20 != 0
-                if ili, readLength != nil {
-                    let remainder = Int(UInt32(sense[3]) << 24 | UInt32(sense[4]) << 16 | UInt32(sense[5]) << 8 | UInt32(sense[6]))
-                    return USBFraming.truncate(data, requested: readLength ?? data.count, remainder: remainder)
-                }
-                return data
+            if let error = ScannerError(sense: sense) { throw error }
+            // Sense-Key 0 mit EOM oder ILI: Befehl war erfolgreich, ILI meldet die Restlänge.
+            let flags = USBFraming.SenseFlags(sense: sense)
+            if flags.ili, let readLength {
+                data = USBFraming.truncate(data, requested: readLength, remainder: flags.information)
             }
-            throw error
+            return CommandResult(data: data, shortRead: flags.ili, endOfMedium: flags.eom)
         }
     }
 

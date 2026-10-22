@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import ScannerKit
 
 /// Zeitquelle der Abfrageschleife. Tests setzen eine Uhr ein, die nur auf Anweisung läuft.
@@ -76,6 +77,10 @@ final class ScannerController {
     static let failureDelay: Duration = .seconds(2)
     /// Abstand der Versuche, solange ein anderes Programm den Scanner hält.
     static let heldDelay: Duration = .seconds(5)
+    /// Ohne Gerät: so lange auf die Ankunftsmeldung warten, dann trotzdem öffnen. Öffnen ohne
+    /// Gerät ist nur eine Suche in der IORegistry, es geht nichts über USB.
+    static let reconnectFallback: Duration = .seconds(15)
+    nonisolated static let log = Logger(subsystem: "app.comodin.Scanr", category: "scanner")
     static let patternKey = "fileNamePattern"
     static let defaultPattern = FileNamer().pattern
 
@@ -170,6 +175,9 @@ final class ScannerController {
     }
 
     private func finish(_ result: ScanResult) {
+        if let error = result.error {
+            Self.log.notice("Durchlauf beendet mit \(String(describing: error), privacy: .public)")
+        }
         if result.scannerError == .disconnected {
             transport = nil
             buttonWasDown = false
@@ -186,54 +194,69 @@ final class ScannerController {
     /// Eine Runde: bei Bedarf verbinden, dann den Gerätestatus abfragen.
     func step() async -> Next {
         let start = environment.clock.now()
-        guard let transport = transport ?? connect() else {
-            return state == .disconnected ? .waitForDevice : .poll(after: retryDelay)
+        let transport: any USBTransport
+        switch self.transport.map(Opening.opened) ?? connect() {
+        case .opened(let t): transport = t
+        case .failed(let next): return next
         }
         do {
             let status = try await transport.hardwareStatus()
-            if scanTask == nil { state = .ready }
+            // Während der Abfrage wurde per Menü ein Scan gestartet: Ergebnis verwerfen.
+            guard scanTask == nil else { return .poll(after: Self.pollInterval) }
+            state = .ready
             let pressed = status.scanButton && !buttonWasDown
             buttonWasDown = status.scanButton
             if pressed { scanNow() }
-        } catch let error as ScannerError {
-            return handle(error)
         } catch {
-            return handle(.protocolViolation("\(error)"))
+            guard scanTask == nil else { return .poll(after: Self.pollInterval) }
+            return commandFailed(error as? ScannerError ?? .protocolViolation("\(error)"))
         }
         let elapsed = environment.clock.now() - start
         return .poll(after: max(.zero, Self.pollInterval - elapsed))
     }
 
-    private var retryDelay: Duration {
-        state == .heldByScanSnapHome ? Self.heldDelay : Self.failureDelay
+    private enum Opening {
+        case opened(any USBTransport)
+        case failed(Next)
     }
 
-    private func connect() -> (any USBTransport)? {
+    private func connect() -> Opening {
         do {
             let opened = try environment.open()
             transport = opened
             buttonWasDown = false
-            return opened
-        } catch let error as ScannerError {
-            _ = handle(error)
+            return .opened(opened)
         } catch {
-            _ = handle(.protocolViolation("\(error)"))
+            return .failed(openFailed(error as? ScannerError ?? .protocolViolation("\(error)")))
         }
-        return nil
     }
 
-    private func handle(_ error: ScannerError) -> Next {
+    /// Öffnen gescheitert. Nur ohne Gerät in der IORegistry wird auf das Anstecken gewartet.
+    private func openFailed(_ error: ScannerError) -> Next {
+        switch error {
+        case .notFound, .disconnected:
+            drop(.disconnected)
+            return .waitForDevice
+        default:
+            return commandFailed(error)
+        }
+    }
+
+    /// Ein Befehl ist gescheitert. Der Transport wird verworfen und auf dem normalen Weg neu
+    /// geöffnet: ein Interface, das in der IORegistry bleibt, meldet keine neue Ankunft.
+    private func commandFailed(_ error: ScannerError) -> Next {
         switch error {
         case .busy:
             state = .busy
             return .poll(after: Self.busyDelay)
         case .notFound, .disconnected:
             drop(.disconnected)
-            return .waitForDevice
+            return .poll(after: Self.failureDelay)
         case .deviceHeldByOtherProcess:
             drop(.heldByScanSnapHome)
             return .poll(after: Self.heldDelay)
         default:
+            Self.log.error("Scannerfehler: \(String(describing: error), privacy: .public)")
             drop(.failed(ResultMessage.describe(error)))
             return .poll(after: Self.failureDelay)
         }
@@ -246,9 +269,13 @@ final class ScannerController {
     }
 
     /// Abfrageschleife bis zum Abbruch. Während eines Scans ruht sie. Ohne Gerät wartet sie auf
-    /// die nächste Meldung in `arrivals` (Gerät angesteckt).
+    /// die nächste Meldung in `arrivals` (Gerät angesteckt), höchstens `reconnectFallback` lang.
     func run(arrivals: AsyncStream<Void>) async {
-        var arrival = arrivals.makeAsyncIterator()
+        let signal = ArrivalSignal()
+        let feeder = Task {
+            for await _ in arrivals { signal.fire() }
+        }
+        defer { feeder.cancel() }
         while !Task.isCancelled {
             if let scanTask {
                 await scanTask.value
@@ -258,8 +285,81 @@ final class ScannerController {
             case .poll(let delay):
                 do { try await environment.clock.sleep(for: delay) } catch { return }
             case .waitForDevice:
-                guard await arrival.next() != nil else { return }
+                guard await waitForDevice(signal) else { return }
             }
+        }
+    }
+
+    /// Wartet auf das Anstecken oder auf den Ablauf von `reconnectFallback`. Falsch heißt:
+    /// die Schleife wurde abgebrochen.
+    private func waitForDevice(_ signal: ArrivalSignal) async -> Bool {
+        let clock = environment.clock
+        let fallback = Self.reconnectFallback
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await signal.wait()
+                return !Task.isCancelled
+            }
+            group.addTask {
+                do {
+                    try await clock.sleep(for: fallback)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+}
+
+/// Meldung „Gerät angesteckt“, die genau einen Wartenden weckt. Kommt sie, während niemand
+/// wartet, bleibt sie für den nächsten liegen. Abbruch weckt den Wartenden ohne Meldung.
+nonisolated final class ArrivalSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+    private var waiter: (id: UUID, continuation: CheckedContinuation<Void, Never>)?
+    private var cancelledIDs: Set<UUID> = []
+
+    func fire() {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            guard let waiter else {
+                pending = true
+                return nil
+            }
+            self.waiter = nil
+            return waiter.continuation
+        }
+        continuation?.resume()
+    }
+
+    func wait() async {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow: Bool = lock.withLock {
+                    if pending {
+                        pending = false
+                        return true
+                    }
+                    if cancelledIDs.remove(id) != nil { return true }
+                    waiter = (id, continuation)
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+        } onCancel: {
+            let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+                if let waiter, waiter.id == id {
+                    self.waiter = nil
+                    return waiter.continuation
+                }
+                cancelledIDs.insert(id)
+                return nil
+            }
+            continuation?.resume()
         }
     }
 }

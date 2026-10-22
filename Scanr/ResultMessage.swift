@@ -23,7 +23,11 @@ nonisolated struct ResultMessage: Equatable, Sendable {
             let problem = Self.describe(error)
             if result.files.isEmpty {
                 title = "Scan fehlgeschlagen"
-                body = "\(problem), nichts gespeichert"
+                body = switch error {
+                case .scanner(.noDocuments): problem
+                case .scanner(.protocolViolation): "Übertragungsfehler, nichts gespeichert. Bitte erneut versuchen"
+                default: "\(problem), nichts gespeichert"
+                }
             } else {
                 let place = result.files.count == 1 ? result.files[0].lastPathComponent : saved
                 title = "Scan unvollständig"
@@ -56,12 +60,13 @@ nonisolated struct ResultMessage: Equatable, Sendable {
         case .doubleFeed: "Doppeleinzug"
         case .paperJam: "Papierstau"
         case .coverOpen: "Klappe offen"
-        case .noDocuments: "Kein Papier"
+        case .noDocuments: "Kein Papier eingelegt"
         case .busy, .deviceHeldByOtherProcess: "Scanner belegt"
         case .disconnected, .notFound: "Scanner getrennt"
         case .rejected(let asc, let ascq):
             String(format: "Scanner lehnt Befehl ab (ASC %02X, ASCQ %02X)", asc, ascq)
-        case .protocolViolation(let detail): "Übertragungsfehler (\(detail))"
+        // Einzelheiten stehen im Protokoll (Logger), nicht in Menü oder Mitteilung.
+        case .protocolViolation: "Übertragungsfehler, bitte erneut versuchen"
         }
     }
 

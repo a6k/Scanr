@@ -7,20 +7,29 @@ final class FakeClock: PollClock, @unchecked Sendable {
     private let lock = NSLock()
     private var current: Duration = .zero
     private var recorded: [Duration] = []
-    /// Nach so vielen Schlafphasen endet die Schleife (CancellationError).
-    var sleepLimit = Int.max
+    /// Schlafphasen ab 10 s (Rückfall ohne Gerät) warten bis `fireLongSleep()` oder Abbruch.
+    var holdLongSleeps = false
+    private let longSleepGate = ArrivalSignal()
+
+    func fireLongSleep() { longSleepGate.fire() }
 
     func now() -> Duration { lock.withLock { current } }
     func advance(_ d: Duration) { lock.withLock { current += d } }
     var sleeps: [Duration] { lock.withLock { recorded } }
 
     func sleep(for duration: Duration) async throws {
-        let stop = lock.withLock {
+        if holdLongSleeps && duration >= .seconds(10) {
+            lock.withLock { recorded.append(duration) }
+            await longSleepGate.wait()
+            try Task.checkCancellation()
+            advance(duration)
+            return
+        }
+        lock.withLock {
             recorded.append(duration)
             current += duration
-            return recorded.count > sleepLimit
         }
-        if stop { throw CancellationError() }
+        try Task.checkCancellation()
         await Task.yield()
     }
 }
@@ -47,11 +56,17 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
 
     var commands: [[UInt8]] { lock.withLock { sent } }
 
+    /// Befehl mit diesem Index (ab 0) hält an, bis `unblock()` kommt.
+    var blockIndex: Int?
+    private let gate = ArrivalSignal()
+    func unblock() { gate.fire() }
+
     func command(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: Duration) async throws -> [UInt8] {
-        let reply: Reply = lock.withLock {
+        let (reply, index): (Reply, Int) = lock.withLock {
             sent.append(cdb)
-            return replies.isEmpty ? fallback : replies.removeFirst()
+            return (replies.isEmpty ? fallback : replies.removeFirst(), sent.count - 1)
         }
+        if index == blockIndex { await gate.wait() }
         clock.advance(cost)
         switch reply {
         case .status(let button):

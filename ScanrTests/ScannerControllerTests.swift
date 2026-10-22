@@ -75,23 +75,37 @@ struct ScannerControllerTests {
         #expect(c.state == .disconnected)
     }
 
-    @Test func disconnectDuringPollDropsTheTransportAndWaits() async {
+    @Test func disconnectFromACommandReopensOnTheNextPoll() async {
+        let rig = Rig { clock in
+            FakeOpener([.success(FakeTransport([.error(.disconnected)], clock: clock)),
+                        .success(FakeTransport([], clock: clock))])
+        }
+        let c = rig.controller()
+
+        #expect(await c.step() == .poll(after: .seconds(2)))
+        #expect(c.state == .disconnected)
+        #expect(await c.step() == .poll(after: .milliseconds(300)))
+        #expect(c.state == .ready)
+        #expect(rig.opener.calls == 2)
+    }
+
+    @Test func disconnectFromACommandWithoutDeviceWaitsForArrival() async {
         let rig = Rig { clock in
             FakeOpener([.success(FakeTransport([.error(.disconnected)], clock: clock)), .failure(.notFound)])
         }
         let c = rig.controller()
 
+        #expect(await c.step() == .poll(after: .seconds(2)))
         #expect(await c.step() == .waitForDevice)
         #expect(c.state == .disconnected)
-        #expect(await c.step() == .waitForDevice)
         #expect(rig.opener.calls == 2)
     }
 
     @Test func deviceArrivalTriggersAReconnect() async {
         let rig = Rig { clock in FakeOpener([.failure(.notFound), .success(FakeTransport([], clock: clock))]) }
+        rig.clock.holdLongSleeps = true
         let c = rig.controller()
         let (arrivals, arrive) = AsyncStream.makeStream(of: Void.self)
-        rig.clock.sleepLimit = 3
         let loop = Task { await c.run(arrivals: arrivals) }
 
         #expect(await eventually { rig.opener.calls == 1 && c.state == .disconnected })
@@ -100,6 +114,60 @@ struct ScannerControllerTests {
         #expect(rig.opener.calls == 2)
         loop.cancel()
         await loop.value
+    }
+
+    @Test func withoutArrivalOpenIsTriedAfterFifteenSeconds() async {
+        let rig = Rig { clock in FakeOpener([.failure(.notFound), .success(FakeTransport([], clock: clock))]) }
+        rig.clock.holdLongSleeps = true
+        let c = rig.controller()
+        let (arrivals, _) = AsyncStream.makeStream(of: Void.self)
+        let loop = Task { await c.run(arrivals: arrivals) }
+
+        #expect(await eventually { rig.clock.sleeps.contains(.seconds(15)) })
+        #expect(rig.opener.calls == 1)
+        #expect(c.state == .disconnected)
+        rig.clock.fireLongSleep()
+        #expect(await eventually { c.state == .ready })
+        #expect(rig.opener.calls == 2)
+        loop.cancel()
+        await loop.value
+    }
+
+    @Test func menuScanDuringAPollKeepsTheConnection() async {
+        let clock = FakeClock()
+        let transport = FakeTransport([.status(button: false), .error(.disconnected)], clock: clock)
+        transport.blockIndex = 1
+        let rig = Rig { _ in FakeOpener([.success(transport)]) }
+        rig.jobs.hold = true
+        let c = rig.controller()
+        _ = await c.step()
+
+        let poll = Task { await c.step() }
+        #expect(await eventually { transport.commands.count == 2 })
+        c.scanNow()
+        #expect(c.isScanning)
+        transport.unblock()
+        _ = await poll.value
+
+        #expect(c.state == .scanning(page: 0))
+        #expect(rig.opener.calls == 1)
+        rig.jobs.release()
+        await c.scanTask?.value
+        #expect(c.state == .ready)
+        _ = await c.step()
+        #expect(c.state == .ready)
+        #expect(rig.opener.calls == 1)
+    }
+
+    @Test func protocolErrorShowsAShortText() async {
+        let rig = Rig { clock in
+            FakeOpener([.success(FakeTransport([.error(.protocolViolation("Error Domain=NSOSStatus Code=-536870212"))],
+                                               clock: clock))])
+        }
+        let c = rig.controller()
+
+        #expect(await c.step() == .poll(after: .seconds(2)))
+        #expect(c.state == .failed("Übertragungsfehler, bitte erneut versuchen"))
     }
 
     @Test func scanSnapHomeHoldingTheDeviceIsReported() async {

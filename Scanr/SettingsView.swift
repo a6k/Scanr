@@ -1,15 +1,19 @@
 import ScannerKit
+import AppKit
+import Combine
 import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     let controller: ScannerController
     let loginItem: LoginItem
+    @State private var notifications = NotificationPermission()
 
     var body: some View {
         TabView {
             Tab("Allgemein", systemImage: "gearshape") {
-                GeneralSettings(controller: controller, loginItem: loginItem)
+                GeneralSettings(controller: controller, loginItem: loginItem, notifications: notifications)
             }
             Tab("Profile", systemImage: "slider.horizontal.3") {
                 ProfileSettings(controller: controller)
@@ -24,6 +28,7 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @Bindable var controller: ScannerController
     let loginItem: LoginItem
+    let notifications: NotificationPermission
 
     private static let placeholders: [(String, String)] = [
         ("{datum}", "Datum, etwa 2026-10-22"),
@@ -64,9 +69,19 @@ private struct GeneralSettings: View {
                     Text(error).foregroundStyle(.red)
                 }
             }
+            Section {
+                LabeledContent("Mitteilungen", value: notifications.statusText)
+                if notifications.isDenied {
+                    Button("Systemeinstellungen öffnen") { notifications.openSystemSettings() }
+                }
+            }
         }
         .formStyle(.grouped)
         .onAppear { loginItem.refresh() }
+        .task { await notifications.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await notifications.refresh() }
+        }
     }
 }
 
@@ -104,6 +119,39 @@ final class LoginItem {
 
     func refresh() {
         status = SMAppService.mainApp.status
+    }
+}
+
+/// Ob Scanr Mitteilungen zeigen darf.
+@Observable
+final class NotificationPermission {
+    private(set) var status: UNAuthorizationStatus?
+
+    var isDenied: Bool { status == .denied }
+
+    var statusText: String {
+        switch status {
+        case .authorized, .provisional, .ephemeral: "erlaubt"
+        case .denied: "abgelehnt"
+        case .notDetermined: "noch nicht gefragt"
+        case nil: "wird geprüft"
+        @unknown default: "unbekannt"
+        }
+    }
+
+    func refresh() async {
+        status = await Self.currentStatus()
+    }
+
+    private nonisolated static func currentStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    func openSystemSettings() {
+        let id = Bundle.main.bundleIdentifier ?? ""
+        let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)")
+            ?? URL(fileURLWithPath: "/System/Applications/System Settings.app")
+        NSWorkspace.shared.open(url)
     }
 }
 

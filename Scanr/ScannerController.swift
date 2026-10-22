@@ -129,7 +129,11 @@ final class ScannerController {
         update(start)
     }
 
-    var namer: FileNamer { FileNamer(pattern: fileNamePattern) }
+    /// Ein leeres Muster ergäbe nur die Nummer, dann gilt das Standardmuster.
+    var namer: FileNamer {
+        let pattern = fileNamePattern.trimmingCharacters(in: .whitespaces)
+        return FileNamer(pattern: pattern.isEmpty ? Self.defaultPattern : fileNamePattern)
+    }
 
     /// Name, den der nächste Scan mit dem aktiven Profil bekäme.
     func previewName(date: Date = Date()) -> String {

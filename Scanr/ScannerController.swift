@@ -1,0 +1,261 @@
+import Foundation
+import Observation
+import ScannerKit
+
+/// Zeitquelle der Abfrageschleife. Tests setzen eine Uhr ein, die nur auf Anweisung läuft.
+nonisolated protocol PollClock: Sendable {
+    /// Vergangene Zeit seit einem festen Ursprung.
+    func now() -> Duration
+    func sleep(for duration: Duration) async throws
+}
+
+nonisolated struct SystemClock: PollClock {
+    private let origin = ContinuousClock.now
+    func now() -> Duration { ContinuousClock.now - origin }
+    func sleep(for duration: Duration) async throws { try await Task.sleep(for: duration) }
+}
+
+/// Zeigt das Ergebnis eines Durchlaufs an.
+protocol ResultNotifier {
+    func post(_ message: ResultMessage)
+}
+
+/// Alles, was der Controller von außen braucht. Die App setzt Gerät, Uhr und Mitteilungen
+/// ein, Tests ihre Attrappen.
+struct ScannerEnvironment {
+    typealias JobRunner = @Sendable (
+        _ transport: any USBTransport, _ profile: ScanProfile, _ namer: FileNamer, _ outputDirectory: URL,
+        _ progress: @escaping @Sendable (Int) -> Void
+    ) async -> ScanResult
+
+    var defaults: UserDefaults
+    var outputDirectory: URL
+    var clock: any PollClock
+    var notifier: any ResultNotifier
+    var open: @Sendable () throws -> any USBTransport
+    var runJob: JobRunner
+
+    /// Echter Scanner über USB, Ausgabe auf den Schreibtisch.
+    static func live(notifier: any ResultNotifier) -> ScannerEnvironment {
+        ScannerEnvironment(
+            defaults: .standard,
+            outputDirectory: FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0],
+            clock: SystemClock(),
+            notifier: notifier,
+            open: { try IOUSBHostTransport.open() },
+            runJob: { transport, profile, namer, dir, progress in
+                await ScanJob(transport: transport, profile: profile, namer: namer, outputDir: dir)
+                    .run(progress: progress)
+            })
+    }
+}
+
+/// Hält die Verbindung zum Scanner, fragt im Leerlauf die Scan-Taste ab und startet Durchläufe.
+@Observable
+final class ScannerController {
+    enum State: Equatable {
+        case disconnected
+        case heldByScanSnapHome
+        case ready
+        case busy
+        case scanning(page: Int)
+        case failed(String)
+    }
+
+    /// Was die Abfrageschleife als Nächstes tut.
+    enum Next: Equatable {
+        case poll(after: Duration)
+        case waitForDevice
+    }
+
+    /// Takt der Abfrage, gemessen vom Beginn einer Abfrage zum Beginn der nächsten.
+    static let pollInterval: Duration = .milliseconds(500)
+    /// Pause, wenn der Scanner beschäftigt ist (etwa ein Scan per WLAN).
+    static let busyDelay: Duration = .seconds(2)
+    /// Pause nach einem Fehler, bevor die Verbindung neu aufgebaut wird.
+    static let failureDelay: Duration = .seconds(2)
+    /// Abstand der Versuche, solange ein anderes Programm den Scanner hält.
+    static let heldDelay: Duration = .seconds(5)
+    static let patternKey = "fileNamePattern"
+    static let defaultPattern = FileNamer().pattern
+
+    private(set) var state: State = .disconnected
+    private(set) var profiles: [ScanProfile]
+    private(set) var activeProfileID: String
+    var fileNamePattern: String {
+        didSet { environment.defaults.set(fileNamePattern, forKey: Self.patternKey) }
+    }
+
+    @ObservationIgnored private let environment: ScannerEnvironment
+    @ObservationIgnored private let store: ProfileStore
+    @ObservationIgnored private var transport: (any USBTransport)?
+    /// Taste bei der letzten erfolgreichen Abfrage gedrückt. Nur der Wechsel von nicht
+    /// gedrückt auf gedrückt startet einen Durchlauf.
+    @ObservationIgnored private var buttonWasDown = false
+    private(set) var scanTask: Task<Void, Never>?
+
+    init(environment: ScannerEnvironment) {
+        self.environment = environment
+        store = ProfileStore(defaults: environment.defaults)
+        let profiles = ProfileLibrary.completed(store.load())
+        self.profiles = profiles
+        activeProfileID = ProfileLibrary.active(id: store.activeProfileID, in: profiles).id
+        fileNamePattern = environment.defaults.string(forKey: Self.patternKey) ?? Self.defaultPattern
+    }
+
+    // MARK: Profile
+
+    /// Das Profil, mit dem der nächste Scan startet.
+    var profile: ScanProfile {
+        get { ProfileLibrary.active(id: activeProfileID, in: profiles) }
+        set { update(newValue) }
+    }
+
+    func selectProfile(_ id: String) {
+        guard profiles.contains(where: { $0.id == id }) else { return }
+        activeProfileID = id
+        store.activeProfileID = id
+    }
+
+    /// Ersetzt das Profil mit derselben id und speichert.
+    func update(_ profile: ScanProfile) {
+        guard let i = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+        profiles[i] = profile
+        store.save(profiles)
+    }
+
+    func restoreStartValues(of id: String) {
+        guard let start = ProfileLibrary.startValue(of: id) else { return }
+        update(start)
+    }
+
+    var namer: FileNamer { FileNamer(pattern: fileNamePattern) }
+
+    /// Name, den der nächste Scan mit dem aktiven Profil bekäme.
+    func previewName(date: Date = Date()) -> String {
+        let ext = profile.format == .pdf ? "pdf" : "jpg"
+        return namer.nextURL(in: environment.outputDirectory, date: date, profile: profile, ext: ext).lastPathComponent
+    }
+
+    // MARK: Scannen
+
+    var isScanning: Bool { scanTask != nil }
+
+    var canScan: Bool { state == .ready && scanTask == nil && transport != nil }
+
+    func scanNow() {
+        guard canScan, let transport else { return }
+        let profile = self.profile, namer = self.namer, dir = environment.outputDirectory
+        let runJob = environment.runJob
+        state = .scanning(page: 0)
+        scanTask = Task {
+            let result = await runJob(transport, profile, namer, dir) { page in
+                Task { @MainActor in self.showProgress(page) }
+            }
+            finish(result)
+        }
+    }
+
+    func cancelScan() {
+        scanTask?.cancel()
+    }
+
+    private func showProgress(_ page: Int) {
+        guard case .scanning(let shown) = state, page > shown else { return }
+        state = .scanning(page: page)
+    }
+
+    private func finish(_ result: ScanResult) {
+        if result.scannerError == .disconnected {
+            transport = nil
+            buttonWasDown = false
+            state = .disconnected
+        } else {
+            state = .ready
+        }
+        scanTask = nil
+        environment.notifier.post(ResultMessage(result))
+    }
+
+    // MARK: Abfrage
+
+    /// Eine Runde: bei Bedarf verbinden, dann den Gerätestatus abfragen.
+    func step() async -> Next {
+        let start = environment.clock.now()
+        guard let transport = transport ?? connect() else {
+            return state == .disconnected ? .waitForDevice : .poll(after: retryDelay)
+        }
+        do {
+            let status = try await transport.hardwareStatus()
+            if scanTask == nil { state = .ready }
+            let pressed = status.scanButton && !buttonWasDown
+            buttonWasDown = status.scanButton
+            if pressed { scanNow() }
+        } catch let error as ScannerError {
+            return handle(error)
+        } catch {
+            return handle(.protocolViolation("\(error)"))
+        }
+        let elapsed = environment.clock.now() - start
+        return .poll(after: max(.zero, Self.pollInterval - elapsed))
+    }
+
+    private var retryDelay: Duration {
+        state == .heldByScanSnapHome ? Self.heldDelay : Self.failureDelay
+    }
+
+    private func connect() -> (any USBTransport)? {
+        do {
+            let opened = try environment.open()
+            transport = opened
+            buttonWasDown = false
+            return opened
+        } catch let error as ScannerError {
+            _ = handle(error)
+        } catch {
+            _ = handle(.protocolViolation("\(error)"))
+        }
+        return nil
+    }
+
+    private func handle(_ error: ScannerError) -> Next {
+        switch error {
+        case .busy:
+            state = .busy
+            return .poll(after: Self.busyDelay)
+        case .notFound, .disconnected:
+            drop(.disconnected)
+            return .waitForDevice
+        case .deviceHeldByOtherProcess:
+            drop(.heldByScanSnapHome)
+            return .poll(after: Self.heldDelay)
+        default:
+            drop(.failed(ResultMessage.describe(error)))
+            return .poll(after: Self.failureDelay)
+        }
+    }
+
+    private func drop(_ newState: State) {
+        transport = nil
+        buttonWasDown = false
+        state = newState
+    }
+
+    /// Abfrageschleife bis zum Abbruch. Während eines Scans ruht sie. Ohne Gerät wartet sie auf
+    /// die nächste Meldung in `arrivals` (Gerät angesteckt).
+    func run(arrivals: AsyncStream<Void>) async {
+        var arrival = arrivals.makeAsyncIterator()
+        while !Task.isCancelled {
+            if let scanTask {
+                await scanTask.value
+                continue
+            }
+            switch await step() {
+            case .poll(let delay):
+                do { try await environment.clock.sleep(for: delay) } catch { return }
+            case .waitForDevice:
+                guard await arrival.next() != nil else { return }
+            }
+        }
+    }
+}

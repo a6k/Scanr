@@ -42,6 +42,7 @@ extension ScannerController.State {
         case .disconnected: "Kein Scanner verbunden"
         case .heldByScanSnapHome: "Von ScanSnap Home belegt"
         case .ready: "Bereit"
+        case .coverOpen: ScannerController.coverOpenText
         case .busy: "Scanner beschäftigt"
         case .scanning(let page): page == 0 ? "Scannt" : "Scannt, Seite \(page)"
         case .recognizing: "Texterkennung …"

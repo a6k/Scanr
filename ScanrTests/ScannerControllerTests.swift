@@ -311,4 +311,66 @@ struct ScannerControllerTests {
         #expect(c.removeStaleTemps(now: now) == 1)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == [fresh, "scan 01.pdf"].sorted())
     }
+
+    @Test func openCoverIsShownBeforeScanning() async {
+        let rig = Rig { clock in
+            FakeOpener([.success(FakeTransport([.status(button: false, coverOpen: true), .status(button: false)],
+                                               clock: clock))])
+        }
+        let c = rig.controller()
+
+        _ = await c.step()
+        #expect(c.state == .coverOpen)
+        #expect(c.state.text == "Klappe offen, bitte schließen")
+        #expect(!c.canScan)
+
+        _ = await c.step()
+        #expect(c.state == .ready)
+    }
+
+    @Test func buttonWithOpenCoverStartsNoJob() async {
+        let rig = Rig { clock in
+            FakeOpener([.success(FakeTransport([.status(button: true, coverOpen: true)], clock: clock))])
+        }
+        let c = rig.controller()
+
+        _ = await c.step()
+
+        #expect(!c.isScanning)
+        #expect(rig.jobs.profiles.isEmpty)
+        #expect(rig.notifier.posted == [ResultMessage(title: "Scan nicht gestartet",
+                                                      body: "Klappe offen, bitte schließen", files: [])])
+    }
+
+    @Test func persistentOpenFailureIsLoggedOnce() async {
+        let missing = ScannerError.protocolViolation("Interface ohne Bulk-Endpunkte")
+        let rig = Rig { _ in FakeOpener([.failure(missing)]) }
+        let c = rig.controller()
+
+        for _ in 0..<5 { #expect(await c.step() == .poll(after: .seconds(2))) }
+
+        #expect(rig.failureLog.value.count == 1)
+    }
+
+    @Test func failureIsLoggedAgainAfterItChangesOrClears() async {
+        let rig = Rig { clock in
+            FakeOpener([.failure(.protocolViolation("A")), .failure(.protocolViolation("A")),
+                        .failure(.protocolViolation("B")),
+                        .success(FakeTransport([.status(button: false), .error(.protocolViolation("B"))], clock: clock))])
+        }
+        let c = rig.controller()
+
+        _ = await c.step()   // A
+        _ = await c.step()   // A, schon protokolliert
+        _ = await c.step()   // B
+        _ = await c.step()   // geöffnet, Status in Ordnung
+        #expect(c.state == .ready)
+        _ = await c.step()   // B nach einer guten Abfrage: wieder protokolliert
+
+        #expect(rig.failureLog.value == [
+            String(describing: ScannerError.protocolViolation("A")),
+            String(describing: ScannerError.protocolViolation("B")),
+            String(describing: ScannerError.protocolViolation("B")),
+        ])
+    }
 }

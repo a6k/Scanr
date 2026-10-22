@@ -35,6 +35,10 @@ struct ScannerEnvironment {
     var notifier: any ResultNotifier
     var open: @Sendable () throws -> any USBTransport
     var runJob: JobRunner
+    /// Protokolliert einen Scannerfehler. Der Controller ruft es nur, wenn sich der Fehler ändert.
+    var logFailure: (String) -> Void = { detail in
+        ScannerController.log.error("Scannerfehler: \(detail, privacy: .public)")
+    }
 
     /// Echter Scanner über USB, Ausgabe auf den Schreibtisch.
     static func live(notifier: any ResultNotifier) -> ScannerEnvironment {
@@ -58,6 +62,8 @@ final class ScannerController {
         case disconnected
         case heldByScanSnapHome
         case ready
+        /// Die Einzugsklappe ist offen (GHS), ein Scan würde sofort scheitern.
+        case coverOpen
         case busy
         case scanning(page: Int)
         /// Der Scanner ist fertig, die Texterkennung für das PDF läuft. Abbrechen geht weiterhin.
@@ -85,6 +91,7 @@ final class ScannerController {
     nonisolated static let log = Logger(subsystem: "app.comodin.Scanr", category: "scanner")
     static let patternKey = "fileNamePattern"
     static let defaultPattern = FileNamer().pattern
+    static let coverOpenText = "Klappe offen, bitte schließen"
 
     private(set) var state: State = .disconnected
     private(set) var profiles: [ScanProfile]
@@ -99,6 +106,8 @@ final class ScannerController {
     /// Taste bei der letzten erfolgreichen Abfrage gedrückt. Nur der Wechsel von nicht
     /// gedrückt auf gedrückt startet einen Durchlauf.
     @ObservationIgnored private var buttonWasDown = false
+    /// Zuletzt protokollierter Fehler. Derselbe Fehler alle 2 s kommt nur einmal ins Protokoll.
+    @ObservationIgnored private var loggedFailure: String?
     private(set) var scanTask: Task<Void, Never>?
 
     init(environment: ScannerEnvironment) {
@@ -220,10 +229,15 @@ final class ScannerController {
             let status = try await transport.hardwareStatus()
             // Während der Abfrage wurde per Menü ein Scan gestartet: Ergebnis verwerfen.
             guard scanTask == nil else { return .poll(after: Self.pollInterval) }
-            state = .ready
+            loggedFailure = nil
+            state = status.coverOpen ? .coverOpen : .ready
             let pressed = status.scanButton && !buttonWasDown
             buttonWasDown = status.scanButton
-            if pressed { scanNow() }
+            if pressed && status.coverOpen {
+                environment.notifier.post(ResultMessage(title: "Scan nicht gestartet", body: Self.coverOpenText, files: []))
+            } else if pressed {
+                scanNow()
+            }
         } catch {
             guard scanTask == nil else { return .poll(after: Self.pollInterval) }
             return commandFailed(error as? ScannerError ?? .protocolViolation("\(error)"))
@@ -273,7 +287,11 @@ final class ScannerController {
             drop(.heldByScanSnapHome)
             return .poll(after: Self.heldDelay)
         default:
-            Self.log.error("Scannerfehler: \(String(describing: error), privacy: .public)")
+            let detail = String(describing: error)
+            if detail != loggedFailure {
+                environment.logFailure(detail)
+                loggedFailure = detail
+            }
             drop(.failed(ResultMessage.describe(error)))
             return .poll(after: Self.failureDelay)
         }

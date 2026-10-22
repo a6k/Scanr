@@ -37,7 +37,7 @@ final class FakeClock: PollClock, @unchecked Sendable {
 /// Transport, der auf jeden Befehl die nächste vorbereitete Antwort gibt.
 /// Jeder Befehl kostet `cost` auf der falschen Uhr.
 final class FakeTransport: USBTransport, @unchecked Sendable {
-    enum Reply { case status(button: Bool), error(ScannerError) }
+    enum Reply { case status(button: Bool, coverOpen: Bool = false), error(ScannerError) }
 
     private let lock = NSLock()
     private var replies: [Reply]
@@ -69,9 +69,10 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
         if index == blockIndex { await gate.wait() }
         clock.advance(cost)
         switch reply {
-        case .status(let button):
+        case .status(let button, let coverOpen):
             var bytes = [UInt8](repeating: 0, count: 12)
             if button { bytes[4] = 0x01 }
+            if coverOpen { bytes[3] = 0x20 }
             return bytes
         case .error(let e):
             throw e
@@ -160,6 +161,7 @@ struct Rig {
     let notifier = FakeNotifier()
     let defaults: UserDefaults
     let opener: FakeOpener
+    let failureLog = Locked<[String]>([])
     var outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
 
     init(opener: (FakeClock) -> FakeOpener) {
@@ -170,14 +172,16 @@ struct Rig {
     }
 
     func controller() -> ScannerController {
-        let opener = self.opener, jobs = self.jobs
-        return ScannerController(environment: ScannerEnvironment(
+        let opener = self.opener, jobs = self.jobs, failureLog = self.failureLog
+        var environment = ScannerEnvironment(
             defaults: defaults,
             outputDirectory: outputDirectory,
             clock: clock,
             notifier: notifier,
             open: { try opener.open() },
-            runJob: { try? await Task.sleep(for: .zero); return await jobs.run($0, $1, $2, $3, $4) }))
+            runJob: { try? await Task.sleep(for: .zero); return await jobs.run($0, $1, $2, $3, $4) })
+        environment.logFailure = { detail in failureLog.withLock { $0.append(detail) } }
+        return ScannerController(environment: environment)
     }
 }
 
@@ -190,4 +194,13 @@ func eventually(tries: Int = 2000, _ condition: () -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(1))
     }
     return condition()
+}
+
+/// Kleiner Behälter für Werte, die aus Rückrufen geändert werden.
+final class Locked<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T { lock.withLock { stored } }
+    func withLock<R>(_ body: (inout T) -> R) -> R { lock.withLock { body(&stored) } }
 }

@@ -33,6 +33,7 @@ final class USBFramingTests: XCTestCase {
         XCTAssertEqual(ScannerError(sense: sense(3, 0x80, 0x07)), .doubleFeed)
         XCTAssertEqual(ScannerError(sense: sense(3, 0x80, 0x01)), .paperJam)
         XCTAssertEqual(ScannerError(sense: sense(3, 0x80, 0x02)), .coverOpen)
+        XCTAssertEqual(ScannerError(sense: sense(5, 0x26, 0x00)), .rejected(asc: 0x26, ascq: 0))
         if case .protocolViolation = ScannerError(sense: sense(4, 0x80, 0x05)) {} else {
             XCTFail("Hardwarefehler muss protocolViolation sein")
         }

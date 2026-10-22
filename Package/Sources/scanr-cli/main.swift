@@ -30,6 +30,8 @@ func message(_ error: Error) -> String {
     case .notFound: return "Kein Scanner gefunden."
     case .deviceHeldByOtherProcess: return "Ein anderes Programm benutzt den Scanner."
     case .disconnected: return "Die Verbindung zum Scanner ist abgerissen."
+    case .rejected(let asc, let ascq):
+        return String(format: "Der Scanner lehnt den Befehl ab (ASC 0x%02x, ASCQ 0x%02x).", asc, ascq)
     case .protocolViolation(let detail): return "Protokollfehler: \(detail)"
     case nil: return "Fehler: \(error)"
     }
@@ -156,10 +158,13 @@ case "scan":
     guard let dpi, let out else { usage() }
     let dir = URL(fileURLWithPath: out, isDirectory: true)
     do {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let session = ScanSession(transport: try IOUSBHostTransport.open())
         var count = 0
         for try await page in session.run(ScanSettings(dpi: dpi, duplex: duplex)) {
+            // Ordner erst anlegen, wenn wirklich eine Seite kommt (also Papier da war).
+            if count == 0 {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
             let name = String(format: "blatt-%03d-%@.png", page.sheet, page.side == .front ? "vorn" : "hinten")
             try writePNG(page.image, dpi: page.dpi, to: dir.appendingPathComponent(name))
             count += 1

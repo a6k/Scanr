@@ -35,6 +35,19 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
     var acceptedInterlace: ColorInterlace?
     /// Zeilenzahl, die die Pixelgröße vor dem Scan meldet (das Fenster, nicht das Papier).
     var windowLines = 1000
+    /// Fehler für den ersten Bild-READ des n-ten eingezogenen Blatts (ab 1).
+    var readError: [Int: ScannerError] = [:]
+    /// Wartezeit vor jedem READ, damit ein Abbruch mitten im Blatt landet.
+    var readDelay: Duration?
+    /// READs dieser Seite liefern immer 0 Byte mit ILI und ohne EOM.
+    var stallSide: ScanSide?
+    /// SET WINDOW endet immer mit diesem Fehler.
+    var setWindowError: ScannerError?
+    /// Pixelgröße meldet überall 0.
+    var zeroPixelSize = false
+    /// Kurze READs kommen ohne ILI und EOM (fehlerhaftes Gerät).
+    var unflaggedShortReads = false
+    private var fedSheets = 0
 
     var calls: [Call] { lock.withLock { log } }
 
@@ -43,7 +56,8 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
     }
 
     func execute(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?, timeout: Duration) async throws -> CommandResult {
-        try lock.withLock { try respond(cdb, dataOut: dataOut, readLength: readLength) }
+        if cdb[0] == 0x28, let d = lock.withLock({ readDelay }) { try await Task.sleep(for: d) }
+        return try lock.withLock { try respond(cdb, dataOut: dataOut, readLength: readLength) }
     }
 
     private func respond(_ cdb: [UInt8], dataOut: [UInt8]?, readLength: Int?) throws -> CommandResult {
@@ -54,8 +68,9 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
             if hopperEmpty { b[3] = 0x80 }
             return CommandResult(data: b)
         case 0x24:
+            if let setWindowError { throw setWindowError }
             if let acceptedInterlace, let d = dataOut, Self.interlace(of: d) != acceptedInterlace {
-                throw ScannerError.protocolViolation("Sense-Key 0x5, ASC 0x26, ASCQ 0x0")
+                throw ScannerError.rejected(asc: 0x26, ascq: 0)
             }
             return CommandResult(data: [])
         case 0x31:
@@ -63,6 +78,7 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
             if let e = objectPositionError[objectPositions] { throw e }
             guard !sheets.isEmpty else { throw ScannerError.noDocuments }
             let s = sheets.removeFirst()
+            fedSheets += 1
             current = s
             remaining = [ScanSide.front.rawValue: s.front, ScanSide.back.rawValue: s.back]
             return CommandResult(data: [])
@@ -70,6 +86,7 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
             guard let s = current else { throw ScannerError.protocolViolation("Pixelgröße ohne Blatt") }
             let lines = cdb[5] == ScanSide.back.rawValue ? s.backLines : s.frontLines
             var b = [UInt8](repeating: 0, count: PixelSize.length)
+            if zeroPixelSize { return CommandResult(data: b) }
             Self.put(&b, 0, s.width)
             Self.put(&b, 4, windowLines)
             Self.put(&b, 8, s.width)
@@ -77,6 +94,8 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
             return CommandResult(data: b)
         case 0x28:
             let side = cdb[5]
+            if let e = readError.removeValue(forKey: fedSheets) { throw e }
+            if stallSide?.rawValue == side { return CommandResult(data: [], shortRead: true) }
             let want = Int(cdb[6]) << 16 | Int(cdb[7]) << 8 | Int(cdb[8])
             let left = remaining[side] ?? []
             if left.count >= want && left.count > 0 {
@@ -84,6 +103,7 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
                 return CommandResult(data: Array(left.prefix(want)))
             }
             remaining[side] = []
+            if unflaggedShortReads { return CommandResult(data: left) }
             return CommandResult(data: left, shortRead: true, endOfMedium: true)
         default:
             return CommandResult(data: [])

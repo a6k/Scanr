@@ -17,14 +17,21 @@ public final class ScanSession: Sendable {
 
     let transport: USBTransport
     let capabilities: ScannerCapabilities
+    /// Pause nach einem leeren READ. Tests setzen sie auf 0.
+    let emptyReadPause: Duration
 
     public convenience init(transport: USBTransport) {
         self.init(transport: transport, capabilities: .iX500)
     }
 
-    public init(transport: USBTransport, capabilities: ScannerCapabilities) {
+    public convenience init(transport: USBTransport, capabilities: ScannerCapabilities) {
+        self.init(transport: transport, capabilities: capabilities, emptyReadPause: .milliseconds(100))
+    }
+
+    init(transport: USBTransport, capabilities: ScannerCapabilities, emptyReadPause: Duration) {
         self.transport = transport
         self.capabilities = capabilities
+        self.emptyReadPause = emptyReadPause
     }
 
     /// Scannt alle Blätter im Einzug. Ein leerer Einzug zu Beginn endet mit `.noDocuments`;
@@ -148,7 +155,10 @@ public final class ScanSession: Sendable {
             do {
                 try await send(Command.setWindow(length: window.count), dataOut: window)
                 return candidate
-            } catch let e as ScannerError where !Self.isFatal(e) {
+            } catch ScannerError.rejected {
+                // Nur eine echte Ablehnung (Illegal Request) heißt „diese Reihenfolge nicht“.
+                // Beschäftigt, Klappe offen usw. werden weitergereicht, sonst stünde eine falsche
+                // Reihenfolge fest.
                 continue
             }
         }
@@ -162,8 +172,9 @@ public final class ScanSession: Sendable {
     private func readSheet(sheet: Int, settings: ScanSettings, geometry g: ScanGeometry,
                            initial: PixelSize?, interlace: ColorInterlace,
                            deliver: (RawPage) -> Void) async throws {
-        let width = initial?.pixelsPerLine ?? g.pixelsPerLine
-        let lines = initial?.lines ?? g.lines
+        // Meldet die Pixelgröße 0 oder fehlt sie, gilt das Fenster (wie SANE ohne has_pixelsize).
+        let width = initial.map(\.pixelsPerLine).flatMap { $0 > 0 ? $0 : nil } ?? g.pixelsPerLine
+        let lines = initial.map(\.lines).flatMap { $0 > 0 ? $0 : nil } ?? g.lines
         var reader = SheetReader(bytesPerLine: width * 3, totalBytes: width * 3 * lines)
 
         while !reader.front.eof {
@@ -195,7 +206,12 @@ public final class ScanSession: Sendable {
         bytes -= bytes % reader.bytesPerLine
         // Manche Geräte wollen gerade Blockgrößen, außer beim letzten Block.
         if bytes % 2 == 1 && bytes < remain { bytes -= reader.bytesPerLine }
-        guard bytes > 0 else { return }
+        // SANE würde hier ohne READ zurückkehren und endlos kreisen. Weniger als eine Zeile Rest
+        // ohne Seitenende kann nicht mehr fertig werden.
+        guard bytes > 0 else {
+            throw ScannerError.protocolViolation(
+                "Seite endet nicht: \(remain) Byte Rest, weniger als eine Zeile (\(reader.bytesPerLine) Byte)")
+        }
 
         // Am Seitenanfang über USB erst fragen, ob Daten bereitliegen (scanner_control_ric).
         if reader[side].bytes == 0 && capabilities.hasScannerControl {
@@ -211,10 +227,13 @@ public final class ScanSession: Sendable {
             result = CommandResult(data: [])
         }
 
-        if result.data.isEmpty && !result.shortRead && !result.endOfMedium {
+        // Leer ohne EOM zählt als „nichts bekommen“, auch mit ILI, sonst liefe die Schleife ewig.
+        if result.data.isEmpty && !result.endOfMedium {
             reader.emptyReads += 1
-            guard reader.emptyReads < Self.maxEmptyReads else { throw ScannerError.busy }
-            try await Task.sleep(for: .milliseconds(100))
+            guard reader.emptyReads < Self.maxEmptyReads else {
+                throw ScannerError.protocolViolation("\(Self.maxEmptyReads) READs in Folge ohne Bilddaten und ohne Seitenende")
+            }
+            try await Task.sleep(for: emptyReadPause)
         } else {
             reader.emptyReads = 0
         }

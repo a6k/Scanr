@@ -8,6 +8,8 @@ public enum ScannerError: Error, Equatable, Sendable {
     case doubleFeed
     case paperJam
     case coverOpen
+    /// Das Gerät lehnt den Befehl ab (Sense-Key 5, Illegal Request), z. B. ein ungültiges Feld.
+    case rejected(asc: UInt8, ascq: UInt8)
     case protocolViolation(String)
 }
 

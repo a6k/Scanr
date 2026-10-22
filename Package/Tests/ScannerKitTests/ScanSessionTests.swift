@@ -159,4 +159,117 @@ final class ScanSessionTests: XCTestCase {
         guard let data = image.dataProvider?.data as Data? else { return [] }
         return Array(data.prefix(3))
     }
+
+    // MARK: Abbruch und Fehler mitten im Stapel
+
+    func testBreakingOutMidSheetSendsCancelAndStopsFeeding() async throws {
+        let fake = FakeTransport()
+        fake.sheets = [sheet(), sheet(), sheet()]
+        fake.readDelay = .milliseconds(20)
+        let session = ScanSession(transport: fake, capabilities: caps)
+        for try await page in session.run(ScanSettings(dpi: 300, duplex: true)) {
+            XCTAssertEqual(page.side, .front)
+            break  // mitten im ersten Blatt: die Rückseite ist noch nicht abgeholt
+        }
+        try await waitFor { fake.calls.map(FakeTransport.label).contains("SCANNER CONTROL 04") }
+        try await Task.sleep(for: .milliseconds(100))
+        let labels = fake.calls.map(FakeTransport.label)
+        XCTAssertEqual(labels.last, "SCANNER CONTROL 04", "nach dem Abbruch kein weiterer Befehl")
+        XCTAssertEqual(labels.filter { $0.hasPrefix("OBJECT POSITION") }.count, 1)
+    }
+
+    func testCancellingConsumerTaskSendsCancel() async throws {
+        let fake = FakeTransport()
+        fake.sheets = [sheet(), sheet()]
+        fake.readDelay = .milliseconds(50)
+        let session = ScanSession(transport: fake, capabilities: caps)
+        let consumer = Task {
+            var n = 0
+            for try await _ in session.run(ScanSettings(dpi: 300, duplex: true)) { n += 1 }
+            return n
+        }
+        try await waitFor { fake.calls.contains { FakeTransport.label($0) == "READ front" } }
+        consumer.cancel()
+        _ = try? await consumer.value
+        try await waitFor { fake.calls.map(FakeTransport.label).last == "SCANNER CONTROL 04" }
+        XCTAssertEqual(fake.calls.map(FakeTransport.label).filter { $0.hasPrefix("OBJECT POSITION") }.count, 1)
+    }
+
+    func testReadErrorOnSecondSheetDeliversFirstSheetThenThrows() async {
+        for failure in [ScannerError.paperJam, .doubleFeed] {
+            let fake = FakeTransport()
+            fake.sheets = [sheet(), sheet()]
+            fake.readError = [2: failure]
+            let (pages, error) = await collect(ScanSession(transport: fake, capabilities: caps),
+                                               ScanSettings(dpi: 300, duplex: true))
+            XCTAssertEqual(pages.map { "\($0.sheet) \($0.side)" }, ["1 front", "1 back"], "\(failure)")
+            XCTAssertEqual(error as? ScannerError, failure)
+            let labels = fake.calls.map(FakeTransport.label)
+            XCTAssertEqual(Array(labels.suffix(2)), ["READ front", "SCANNER CONTROL 04"], "\(failure)")
+        }
+    }
+
+    // MARK: Schutz vor Endlosschleifen und falschen Annahmen
+
+    func testShortReadsWithoutDataAndWithoutEomEndWithError() async {
+        let fake = FakeTransport()
+        fake.sheets = [sheet()]
+        fake.stallSide = .back
+        let session = ScanSession(transport: fake, capabilities: caps, emptyReadPause: .zero)
+        let (pages, error) = await collect(session, ScanSettings(dpi: 300, duplex: true))
+        XCTAssertEqual(pages.count, 1, "Vorderseite kam noch")
+        guard case .protocolViolation = error as? ScannerError else {
+            return XCTFail("Fehler erwartet, bekam \(String(describing: error))")
+        }
+        XCTAssertEqual(fake.calls.map(FakeTransport.label).last, "SCANNER CONTROL 04")
+    }
+
+    func testRemainderBelowOneLineEndsWithError() async {
+        let fake = FakeTransport()
+        // 5 Zeilen Fenster, das Gerät schickt 4,5 Zeilen ohne ILI und EOM: Rest unter einer Zeile.
+        var s = sheet(width: 4, frontLines: 5, backLines: 5)
+        s.front.removeLast(6)
+        fake.sheets = [s]
+        fake.windowLines = 5
+        fake.unflaggedShortReads = true
+        let (_, error) = await collect(ScanSession(transport: fake, capabilities: caps, emptyReadPause: .zero),
+                                       ScanSettings(dpi: 300, duplex: false))
+        guard case .protocolViolation(let text) = error as? ScannerError else {
+            return XCTFail("Fehler erwartet, bekam \(String(describing: error))")
+        }
+        XCTAssertTrue(text.contains("weniger als eine Zeile"), text)
+    }
+
+    func testZeroPixelSizeFallsBackToWindowGeometry() async throws {
+        let fake = FakeTransport()
+        fake.zeroPixelSize = true
+        // 50 dpi: Fensterbreite 10200 * 50 / 1200 = 425, gerade 424.
+        fake.sheets = [sheet(width: 424, frontLines: 2, backLines: 2)]
+        let (pages, error) = await collect(ScanSession(transport: fake, capabilities: caps),
+                                           ScanSettings(dpi: 50, duplex: false))
+        XCTAssertNil(error)
+        XCTAssertEqual(pages.first?.image.width, 424)
+        XCTAssertEqual(pages.first?.image.height, 2)
+    }
+
+    func testInterlaceProbePassesOnTransientErrors() async {
+        for transient in [ScannerError.busy, .coverOpen] {
+            let fake = FakeTransport()
+            fake.setWindowError = transient
+            var c = caps
+            c.colorInterlace = nil
+            let (_, error) = await collect(ScanSession(transport: fake, capabilities: c),
+                                           ScanSettings(dpi: 300, duplex: true))
+            XCTAssertEqual(error as? ScannerError, transient)
+            XCTAssertEqual(fake.calls.map(FakeTransport.label), ["SET WINDOW"], "keine weitere Reihenfolge probiert")
+        }
+    }
+
+    private func waitFor(_ condition: () -> Bool, timeout: Duration = .seconds(5)) async throws {
+        let end = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < end else { return XCTFail("Bedingung nicht erreicht") }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }

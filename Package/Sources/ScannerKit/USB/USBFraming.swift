@@ -79,6 +79,8 @@ extension ScannerError {
             if asc == 0x00 && ascq == 0x00 { return nil }
             if asc == 0x80 { return nil }  // Hardware-Statusbits
             self = unknown
+        case 0x5:
+            self = .rejected(asc: asc, ascq: ascq)
         case 0x2:
             self = (asc == 0 && ascq == 0) ? .busy : unknown
         case 0x3:

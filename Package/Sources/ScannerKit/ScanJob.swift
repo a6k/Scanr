@@ -1,19 +1,36 @@
 import CoreGraphics
 import Foundation
 
+/// Warum ein Durchlauf nicht sauber zu Ende ging.
+public enum ScanJobError: Error, Equatable, Sendable {
+    /// Der Scanner hat den Stapel beendet (Doppeleinzug, Stau, kein Papier, ...).
+    case scanner(ScannerError)
+    /// Eine Datei ließ sich nicht schreiben.
+    case output(OutputError)
+}
+
 /// Ergebnis eines Durchlaufs.
 public struct ScanResult: Sendable {
     /// Geschriebene Dateien, bei JPG eine je Seite.
     public let files: [URL]
     /// Seiten, die in den Dateien stehen (ohne entfernte Leerseiten).
     public let pages: Int
-    /// Fehler, der den Stapel beendet hat. Was bis dahin gescannt war, steht in `files`.
-    public let error: ScannerError?
+    /// Der Fehler, den die Oberfläche nennen soll. Ein Schreibfehler hat Vorrang, wenn danach
+    /// keine Datei vorliegt (PDF), sonst steht hier der Scannerfehler.
+    public let error: ScanJobError?
+    /// Der Scannerfehler, der den Stapel beendet hat, auch wenn `error` ein Schreibfehler ist.
+    public let scannerError: ScannerError?
+    /// Der Durchlauf wurde abgebrochen. Bereits geschriebene JPGs bleiben in `files`; eine PDF
+    /// wird bei Abbruch nicht geschrieben.
+    public let cancelled: Bool
 
-    public init(files: [URL], pages: Int, error: ScannerError?) {
+    public init(files: [URL], pages: Int, error: ScanJobError?, scannerError: ScannerError? = nil,
+                cancelled: Bool = false) {
         self.files = files
         self.pages = pages
         self.error = error
+        self.scannerError = scannerError
+        self.cancelled = cancelled
     }
 }
 
@@ -45,16 +62,17 @@ public struct ScanJob: Sendable {
         self.outputDir = outputDir
     }
 
-    /// Führt den Durchlauf aus. `progress` bekommt nach jeder gescannten Seite die Zahl der
-    /// Seiten, die im Ergebnis stehen werden.
+    /// Führt den Durchlauf aus. `progress` bekommt nach jeder behaltenen Seite die Zahl der
+    /// Seiten, die im Ergebnis stehen werden (Leerseiten zählen nicht).
     ///
-    /// Wird die Aufgabe abgebrochen, stoppt der Scanner, es bleibt keine Datei übrig (bereits
-    /// geschriebene JPGs dieses Durchlaufs werden wieder entfernt) und das Ergebnis ist leer.
+    /// Bei Abbruch stoppt der Scanner. Fertig geschriebene Dateien bleiben (JPG: alle bis dahin),
+    /// eine PDF entsteht nicht. Das Ergebnis trägt dann `cancelled == true`.
     public func run(progress: @Sendable (Int) -> Void) async -> ScanResult {
         var kept: [ProcessedPage] = []   // nur PDF
-        var files: [URL] = []            // nur JPG, bis zum Ende
+        var files: [URL] = []            // nur JPG
         var pageCount = 0
-        var failure: ScannerError?
+        var scanFailure: ScannerError?
+        var outputFailure: OutputError?
 
         do {
             for try await raw in session.run(profile.scanSettings) {
@@ -62,7 +80,7 @@ public struct ScanJob: Sendable {
                 guard let page = Self.prepare(raw.image, profile: profile) else { continue }
                 switch profile.format {
                 case .pdf:
-                    kept.append(page)
+                    kept.append(Self.compact(page, quality: profile.jpegQuality))
                 case .jpg:
                     files.append(try writeJPEG(page))
                 }
@@ -73,33 +91,52 @@ public struct ScanJob: Sendable {
         } catch is CancellationError {
             return cancelled(files)
         } catch let e as ScannerError {
-            failure = e
+            scanFailure = e
         } catch let e as OutputError {
-            failure = Self.scannerError(e)
+            outputFailure = e
         } catch {
-            failure = .protocolViolation("\(error)")
+            scanFailure = .protocolViolation("\(error)")
         }
-        if failure == nil && Task.isCancelled { return cancelled(files) }
+        if scanFailure == nil && outputFailure == nil && Task.isCancelled { return cancelled(files) }
 
-        if profile.format == .pdf && !kept.isEmpty {
+        if profile.format == .pdf && !kept.isEmpty && outputFailure == nil {
             do {
                 files = [try await writePDF(kept)]
             } catch is CancellationError {
                 return cancelled([])
             } catch let e as OutputError {
-                failure = failure ?? Self.scannerError(e)
+                outputFailure = e
                 pageCount = 0
             } catch {
-                failure = failure ?? .protocolViolation("\(error)")
+                outputFailure = .cannotCreateFile
                 pageCount = 0
             }
         }
-        return ScanResult(files: files, pages: pageCount, error: failure)
+        // Ein Schreibfehler gewinnt, wenn nichts geschrieben wurde; der Scannerfehler bleibt in
+        // `scannerError`. Mit geschriebener Datei zählt der Fehler, der den Stapel beendet hat.
+        let error: ScanJobError? = if let outputFailure, files.isEmpty || scanFailure == nil {
+            .output(outputFailure)
+        } else if let scanFailure {
+            .scanner(scanFailure)
+        } else {
+            nil
+        }
+        return ScanResult(files: files, pages: pageCount, error: error, scannerError: scanFailure)
     }
 
     private func cancelled(_ written: [URL]) -> ScanResult {
-        for url in written { try? FileManager.default.removeItem(at: url) }
-        return ScanResult(files: [], pages: 0, error: nil)
+        ScanResult(files: written, pages: written.count, error: nil, cancelled: true)
+    }
+
+    /// Farb- und Graubilder sofort als JPEG kodieren (Qualität des Profils), damit sie bis zum
+    /// Schreiben der PDF nur noch die komprimierten Bytes belegen. 1 Bit ist schon klein.
+    static func compact(_ page: ProcessedPage, quality: Double) -> ProcessedPage {
+        guard page.image.bitsPerComponent > 1,
+              let data = JPEGWriter.encode(page.image, dpi: page.dpi, quality: quality),
+              let provider = CGDataProvider(data: data as CFData),
+              let lazy = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return page }
+        return ProcessedPage(image: lazy, dpi: page.dpi, isColor: page.isColor, jpegData: data)
     }
 
     // MARK: Seite aufbereiten
@@ -163,14 +200,5 @@ public struct ScanJob: Sendable {
             }
         }
         throw OutputError.destinationExists
-    }
-
-    private static func scannerError(_ e: OutputError) -> ScannerError {
-        switch e {
-        case .noPages: .protocolViolation("Keine Seiten zum Schreiben")
-        case .cannotCreateFile: .protocolViolation("Datei lässt sich nicht anlegen")
-        case .encodingFailed: .protocolViolation("Bild lässt sich nicht kodieren")
-        case .destinationExists: .protocolViolation("Kein freier Dateiname gefunden")
-        }
     }
 }

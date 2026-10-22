@@ -6,11 +6,16 @@ public struct ProcessedPage: @unchecked Sendable {
     public let image: CGImage
     public let dpi: Int
     public let isColor: Bool
+    /// Fertig kodierte JPEG-Daten desselben Bilds (Farbe oder Grau). Sind sie gesetzt, bettet
+    /// `PDFComposer` genau diese Bytes ein, ohne erneut zu komprimieren; `image` ist dann nur
+    /// eine verzögert dekodierte Sicht auf die Daten und hält kein Bitmap.
+    public let jpegData: Data?
 
-    public init(image: CGImage, dpi: Int, isColor: Bool) {
+    public init(image: CGImage, dpi: Int, isColor: Bool, jpegData: Data? = nil) {
         self.image = image
         self.dpi = dpi
         self.isColor = isColor
+        self.jpegData = jpegData
     }
 }
 
@@ -152,7 +157,10 @@ public enum PageProcessor {
             let box = CGRect(x: (cx - Double(outW) / 2).rounded(), y: (cy - Double(outH) / 2).rounded(),
                              width: Double(outW), height: Double(outH))
                 .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            return image.cropping(to: box) ?? image
+            // `cropping(to:)` teilt den Puffer des Originals und hielte das ganze Rohbild im
+            // Speicher; darum in einen eigenen Puffer der Größe des Zuschnitts kopieren.
+            guard let part = image.cropping(to: box) else { return image }
+            return ownedCopy(of: part) ?? part
         }
 
         guard let space = image.colorSpace.flatMap({ $0.model == .rgb ? $0 : nil }) ?? CGColorSpace(name: CGColorSpace.sRGB),
@@ -179,6 +187,18 @@ public enum PageProcessor {
             a: px.0 - o.0, b: px.1 - o.1, c: py.0 - o.0, d: py.1 - o.1, tx: o.0, ty: o.1))
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return ctx.makeImage() ?? image
+    }
+
+    /// Kopie in einem eigenen Puffer (RGB, 8 Bit), ohne Bezug zum Puffer des Originals.
+    static func ownedCopy(of image: CGImage) -> CGImage? {
+        guard image.width > 0, image.height > 0,
+              let space = image.colorSpace.flatMap({ $0.model == .rgb ? $0 : nil }) ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return ctx.makeImage()
     }
 
     // MARK: Grau

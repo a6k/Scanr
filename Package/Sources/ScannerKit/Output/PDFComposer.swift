@@ -37,6 +37,11 @@ public enum PDFComposer {
     /// Farbseiten gehen als fertig kodierte JPEG-Daten in das PDF (CoreGraphics übernimmt sie
     /// ohne erneute Kompression). Alles andere, vor allem 1 Bit, bleibt wie es ist.
     private static func embeddable(_ page: ProcessedPage, quality: Double) -> CGImage {
+        if let data = page.jpegData, let provider = CGDataProvider(data: data as CFData),
+           let jpeg = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        {
+            return jpeg
+        }
         guard page.isColor, page.image.bitsPerComponent > 1,
               let data = JPEGWriter.encode(page.image, dpi: page.dpi, quality: quality),
               let provider = CGDataProvider(data: data as CFData),

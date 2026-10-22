@@ -42,9 +42,13 @@ public struct ScanProfile: Codable, Equatable, Sendable, Identifiable {
 
     public var scanSettings: ScanSettings { ScanSettings(dpi: dpi, duplex: duplex) }
 
+    public static let rechnungen = ScanProfile(
+        id: "rechnungen", name: "Rechnungen", dpi: 300, colorMode: .blackWhite, format: .pdf,
+        jpegQuality: 0.4, duplex: true, removeBlankPages: true)
+
     public static let auto = ScanProfile(
         id: "auto", name: "Auto", dpi: 300, colorMode: .autoDetect, format: .pdf,
-        jpegQuality: 0.6, duplex: true, removeBlankPages: true)
+        jpegQuality: 0.4, duplex: true, removeBlankPages: true)
 
     public static let foto = ScanProfile(
         id: "foto", name: "Foto", dpi: 600, colorMode: .color, format: .jpg,
@@ -52,7 +56,7 @@ public struct ScanProfile: Codable, Equatable, Sendable, Identifiable {
 
     /// Startwert eines Profils mit dieser id, sonst nil.
     static func startValue(forID id: String) -> ScanProfile? {
-        [auto, foto].first { $0.id == id }
+        [rechnungen, auto, foto].first { $0.id == id }
     }
 
     // Beim Lesen fällt eine unzulässige Auflösung auf den Startwert des Profils zurück
@@ -76,6 +80,8 @@ public struct ScanProfile: Codable, Equatable, Sendable, Identifiable {
 /// unlesbar, kommen die Startwerte.
 public struct ProfileStore: @unchecked Sendable {
     static let key = "scanProfiles"
+    static let activeKey = "activeProfileID"
+    static let startProfiles: [ScanProfile] = [.rechnungen, .auto, .foto]
     let defaults: UserDefaults
 
     private struct Lossy: Decodable {
@@ -91,9 +97,15 @@ public struct ProfileStore: @unchecked Sendable {
         // Elementweise lesen: ein beschädigter Eintrag kostet nicht alle anderen.
         guard let data = defaults.data(forKey: Self.key),
               let boxes = try? JSONDecoder().decode([Lossy].self, from: data)
-        else { return [.auto, .foto] }
+        else { return Self.startProfiles }
         let profiles = boxes.compactMap(\.profile)
-        return profiles.isEmpty ? [.auto, .foto] : profiles
+        return profiles.isEmpty ? Self.startProfiles : profiles
+    }
+
+    /// Id des Profils, mit dem ein Scan startet. Ohne Eintrag „Rechnungen“.
+    public var activeProfileID: String {
+        get { defaults.string(forKey: Self.activeKey) ?? ScanProfile.rechnungen.id }
+        nonmutating set { defaults.set(newValue, forKey: Self.activeKey) }
     }
 
     public func save(_ profiles: [ScanProfile]) {

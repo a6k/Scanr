@@ -20,7 +20,7 @@ final class ScanProfileTests: XCTestCase {
         XCTAssertTrue(ScanProfile.auto.removeBlankPages)
         XCTAssertEqual(ScanProfile.auto.colorMode, .autoDetect)
         XCTAssertEqual(ScanProfile.auto.format, .pdf)
-        XCTAssertEqual(ScanProfile.auto.jpegQuality, 0.6)
+        XCTAssertEqual(ScanProfile.auto.jpegQuality, 0.4)
         XCTAssertEqual(ScanProfile.foto.dpi, 600)
         XCTAssertEqual(ScanProfile.foto.colorMode, .color)
         XCTAssertEqual(ScanProfile.foto.format, .jpg)
@@ -28,10 +28,19 @@ final class ScanProfileTests: XCTestCase {
         XCTAssertTrue(ScanProfile.foto.duplex)
         XCTAssertTrue(ScanProfile.foto.removeBlankPages)
         XCTAssertEqual(ScanProfile.auto.scanSettings, ScanSettings(dpi: 300, duplex: true))
+        let r = ScanProfile.rechnungen
+        XCTAssertEqual(r.id, "rechnungen")
+        XCTAssertEqual(r.name, "Rechnungen")
+        XCTAssertEqual(r.dpi, 300)
+        XCTAssertEqual(r.colorMode, .blackWhite)
+        XCTAssertEqual(r.format, .pdf)
+        XCTAssertTrue(r.duplex)
+        XCTAssertTrue(r.removeBlankPages)
+        XCTAssertEqual(r.jpegQuality, 0.4)
     }
 
     func testEmptyDefaultsGiveStartProfiles() {
-        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.auto, .foto])
+        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.rechnungen, .auto, .foto])
     }
 
     func testSaveAndReload() {
@@ -48,7 +57,7 @@ final class ScanProfileTests: XCTestCase {
 
     func testBrokenJSONGivesStartProfiles() {
         defaults.set(Data("{kaputt".utf8), forKey: ProfileStore.key)
-        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.auto, .foto])
+        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.rechnungen, .auto, .foto])
     }
 
     func testOutOfRangeDpiFallsBackToStartValue() throws {
@@ -88,7 +97,7 @@ final class ScanProfileTests: XCTestCase {
 
     func testNothingDecodableGivesStartProfiles() throws {
         defaults.set(try JSONSerialization.data(withJSONObject: [["x": 1]]), forKey: ProfileStore.key)
-        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.auto, .foto])
+        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.rechnungen, .auto, .foto])
     }
 
     func testJpegQualityIsClampedOnDecode() throws {
@@ -109,5 +118,13 @@ final class ScanProfileTests: XCTestCase {
         dec.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         let back = try dec.decode(ScanProfile.self, from: enc.encode(p))
         XCTAssertEqual(back.jpegQuality, 0.9)
+    }
+
+    func testActiveProfileDefaultsToRechnungenAndPersists() {
+        let defaults = UserDefaults(suiteName: "scanr-active-\(UUID().uuidString)")!
+        let store = ProfileStore(defaults: defaults)
+        XCTAssertEqual(store.activeProfileID, ScanProfile.rechnungen.id)
+        store.activeProfileID = "foto"
+        XCTAssertEqual(ProfileStore(defaults: defaults).activeProfileID, "foto")
     }
 }

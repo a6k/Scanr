@@ -288,6 +288,19 @@ final class PageProcessorTests: XCTestCase {
         XCTAssertFalse(PageProcessor.hasColor(Self.makeScan(paperMM: (210, 297), angle: 1.0)))
     }
 
+    // MARK: Speicher
+
+    /// Der gerade Zuschnitt darf das Rohbild nicht am Leben halten: `cropping(to:)` teilt
+    /// dessen Puffer, das Ergebnis muss einen eigenen, nur so großen haben.
+    func testStraightCropOwnsItsBuffer() throws {
+        let scan = Self.makeScan(paperMM: (180, 260), angle: 0, blocks: Self.textLines(count: 20, width: 120))
+        let out = PageProcessor.cropAndDeskew(scan)
+        XCTAssertLessThan(out.width, scan.width, "Zuschnitt hat stattgefunden")
+        let held = try CFDataGetLength(XCTUnwrap(out.dataProvider?.data))
+        let needed = out.width * out.height * out.bitsPerPixel / 8
+        XCTAssertLessThanOrEqual(held, needed + 64 * out.height, "Puffer gehört dem Zuschnitt allein")
+    }
+
     // MARK: Bereits zugeschnitten
 
     /// Zugeschnittenes Blatt ohne Hintergrund: weiß, mit einer hellgrauen Bahn über die ganze

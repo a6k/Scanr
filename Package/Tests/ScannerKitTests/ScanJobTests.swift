@@ -110,17 +110,40 @@ final class ScanJobTests: XCTestCase {
         let f = fake([sheet(front: text(["Blatt eins"]), back: blank), sheet(front: text(["Blatt zwei"]), back: blank)])
         f.objectPositionError = [2: .doubleFeed]
         let result = await job(f, profile(.auto)).run { _ in }
-        XCTAssertEqual(result.error, .doubleFeed)
+        XCTAssertEqual(result.error, .scanner(.doubleFeed))
+        XCTAssertFalse(result.cancelled)
         XCTAssertEqual(result.pages, 1)
         XCTAssertEqual(names(), ["scan 01.pdf"])
         XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 1)
+    }
+
+    func testPaperJamAfterFirstSheetKeepsFirstSheet() async throws {
+        let f = fake([sheet(front: text(["Blatt eins"]), back: blank), sheet(front: text(["Blatt zwei"]), back: blank)])
+        f.objectPositionError = [2: .paperJam]
+        let result = await job(f, profile(.auto)).run { _ in }
+        XCTAssertEqual(result.error, .scanner(.paperJam))
+        XCTAssertEqual(result.pages, 1)
+        XCTAssertEqual(names(), ["scan 01.pdf"])
+        XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 1)
+    }
+
+    func testWriteFailureIsNotHiddenByEarlierScannerError() async {
+        let f = fake([sheet(front: text(["Blatt eins"]), back: blank), sheet(front: text(["Blatt zwei"]), back: blank)])
+        f.objectPositionError = [2: .doubleFeed]
+        var j = job(f, profile(.auto))
+        j.beforeWrite = { url in FileManager.default.createFile(atPath: url.path, contents: Data("x".utf8)) }
+        let result = await j.run { _ in }
+        XCTAssertEqual(result.error, .output(.destinationExists))
+        XCTAssertEqual(result.scannerError, .doubleFeed)
+        XCTAssertTrue(result.files.isEmpty)
+        XCTAssertEqual(result.pages, 0)
     }
 
     func testEmptyHopperReturnsNoDocumentsAndWritesNothing() async {
         let f = fake([])
         f.hopperEmpty = true
         let result = await job(f, profile(.auto)).run { _ in }
-        XCTAssertEqual(result.error, .noDocuments)
+        XCTAssertEqual(result.error, .scanner(.noDocuments))
         XCTAssertEqual(result.pages, 0)
         XCTAssertTrue(result.files.isEmpty)
         XCTAssertEqual(names(), [])
@@ -223,43 +246,78 @@ final class ScanJobTests: XCTestCase {
         var j = job(f, profile(.auto))
         j.beforeWrite = { url in FileManager.default.createFile(atPath: url.path, contents: Data("x".utf8)) }
         let result = await j.run { _ in }
-        XCTAssertNotNil(result.error)
+        XCTAssertEqual(result.error, .output(.destinationExists))
+        XCTAssertNil(result.scannerError)
         XCTAssertTrue(result.files.isEmpty)
         XCTAssertEqual(names().count, 5, "fünf fremde Dateien, nichts von uns")
     }
 
     // MARK: Abbruch
 
-    func testCancelWhileScanningWritesNothing() async throws {
-        let sheets = (0..<4).map { _ in sheet(front: text(["Seite"]), back: blank) }
-        let f = fake(sheets)
-        f.readDelay = .milliseconds(20)
+    private func positions(_ f: FakeTransport) -> Int {
+        f.calls.map(FakeTransport.label).filter { $0.hasPrefix("OBJECT POSITION") }.count
+    }
+
+    func testCancelAfterFirstPageStopsScannerAndWritesNoPDF() async throws {
+        let sheetCount = 6
+        let f = fake((0..<sheetCount).map { _ in sheet(front: text(["Seite"]), back: blank) })
+        f.readDelay = .milliseconds(10)
         let j = job(f, profile(.auto))
-        let task = Task { await j.run { _ in } }
-        try await Task.sleep(for: .milliseconds(150))
-        task.cancel()
+        let box = Locked<Task<ScanResult, Never>?>(nil)
+        let task = Task { await j.run { _ in box.withLock { $0 }?.cancel() } }
+        box.withLock { $0 = task }
         let result = await task.value
+        XCTAssertTrue(result.cancelled)
+        XCTAssertNil(result.error)
         XCTAssertTrue(result.files.isEmpty)
         XCTAssertEqual(result.pages, 0)
         XCTAssertEqual(names(), [])
-        // Der Scanner wird abgebrochen.
-        try await Task.sleep(for: .milliseconds(200))
+        try await Task.sleep(for: .milliseconds(300))
+        // Nur Abbruch erklärt das: nicht alle Blätter wurden eingezogen (sonst sheetCount + 1).
+        XCTAssertLessThan(positions(f), sheetCount)
         XCTAssertEqual(f.calls.map(FakeTransport.label).last, "SCANNER CONTROL 04")
     }
 
-    func testCancelRemovesJPGsAlreadyWritten() async throws {
-        let sheets = (0..<3).map { _ in sheet(front: text(["Seite"]), back: blank) }
-        let f = fake(sheets)
+    func testCancelKeepsJPGsAlreadyWritten() async throws {
+        let sheetCount = 6
+        let f = fake((0..<sheetCount).map { _ in sheet(front: text(["Seite"]), back: blank) })
+        f.readDelay = .milliseconds(10)
         let j = job(f, profile(.auto) { $0.format = .jpg })
         let box = Locked<Task<ScanResult, Never>?>(nil)
-        let task = Task {
-            await j.run { _ in box.withLock { $0 }?.cancel() }
-        }
+        let task = Task { await j.run { _ in box.withLock { $0 }?.cancel() } }
         box.withLock { $0 = task }
         let result = await task.value
-        XCTAssertTrue(result.files.isEmpty)
-        XCTAssertEqual(result.pages, 0)
-        XCTAssertEqual(names(), [])
+        XCTAssertTrue(result.cancelled)
+        XCTAssertEqual(result.files.map(\.lastPathComponent), ["scan 01.jpg"])
+        XCTAssertEqual(result.pages, 1)
+        XCTAssertEqual(names(), ["scan 01.jpg"], "fertige Datei bleibt")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertLessThan(positions(f), sheetCount)
+    }
+
+    // MARK: Speicher
+
+    func testCompactKeepsColorAndGrayAsJPEGBytesAndLeavesOneBitAlone() throws {
+        let color = ScanJob.prepare(TestPages.colorPage(dpi: dpi), profile: profile(.auto))!
+        let c = ScanJob.compact(color, quality: 0.4)
+        XCTAssertNotNil(c.jpegData)
+        XCTAssertTrue(c.isColor)
+        let gray = ScanJob.prepare(TestPages.colorPage(dpi: dpi), profile: profile(.auto) { $0.colorMode = .gray })!
+        XCTAssertNotNil(ScanJob.compact(gray, quality: 0.4).jpegData)
+        let bw = ScanJob.prepare(text(["Text"]), profile: profile(.auto))!
+        XCTAssertNil(ScanJob.compact(bw, quality: 0.4).jpegData)
+        // Das PDF übernimmt die Bytes unverändert.
+        let url = dir.appendingPathComponent("c.pdf")
+        try PDFComposer.write([(c, [])], to: url, jpegQuality: 0.4)
+        let data = try Data(contentsOf: url)
+        XCTAssertNotNil(data.range(of: try XCTUnwrap(c.jpegData)), "JPEG-Bytes liegen im PDF")
+    }
+
+    func testColorPDFHasOneEmbeddedPagePerScannedPage() async throws {
+        let f = fake([sheet(front: TestPages.colorPage(dpi: dpi), back: blank)])
+        let result = await job(f, profile(.auto)).run { _ in }
+        XCTAssertNil(result.error)
+        XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 1)
     }
 }
 

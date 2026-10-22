@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Prüfwerkzeug für den Scanner am USB. Nur für Entwicklung.
 func usage() -> Never {
-    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] --out <ordner> | job --profile auto|foto [--out <ordner>]\n".utf8))
+    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] --out <ordner> | job --profile rechnungen|auto|foto [--out <ordner>]\n".utf8))
     exit(2)
 }
 
@@ -34,6 +34,23 @@ func message(_ error: Error) -> String {
         return String(format: "Der Scanner lehnt den Befehl ab (ASC 0x%02x, ASCQ 0x%02x).", asc, ascq)
     case .protocolViolation(let detail): return "Protokollfehler: \(detail)"
     case nil: return "Fehler: \(error)"
+    }
+}
+
+/// Meldung zu einem Schreibfehler des Durchlaufs.
+func message(_ error: OutputError) -> String {
+    switch error {
+    case .noPages: return "Keine Seiten zum Schreiben."
+    case .cannotCreateFile: return "Die Datei ließ sich nicht schreiben (Ordner prüfen: Rechte, freier Platz)."
+    case .encodingFailed: return "Das Bild ließ sich nicht kodieren."
+    case .destinationExists: return "Kein freier Dateiname gefunden, es liegen zu viele Dateien mit dem Namen vor."
+    }
+}
+
+func message(_ error: ScanJobError) -> String {
+    switch error {
+    case .scanner(let e): return message(e)
+    case .output(let e): return message(e)
     }
 }
 
@@ -188,6 +205,7 @@ case "job":
     }
     let profile: ScanProfile
     switch profileID {
+    case "rechnungen": profile = .rechnungen
     case "auto": profile = .auto
     case "foto": profile = .foto
     default: usage()
@@ -200,6 +218,10 @@ case "job":
         let result = await job.run { print("\($0) Seiten") }
         for file in result.files { print("geschrieben: \(file.path)") }
         print("\(result.pages) Seiten in \(result.files.count) Datei(en)")
+        if result.cancelled { print("Abgebrochen.") }
+        if case .output = result.error, let scanError = result.scannerError {
+            FileHandle.standardError.write(Data(("Zuvor: " + message(scanError) + "\n").utf8))
+        }
         if let error = result.error {
             FileHandle.standardError.write(Data((message(error) + "\n").utf8))
             exit(1)

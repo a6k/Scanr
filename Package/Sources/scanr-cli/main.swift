@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Prüfwerkzeug für den Scanner am USB. Nur für Entwicklung.
 func usage() -> Never {
-    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] --out <ordner> | job --profile rechnungen|auto|foto [--out <ordner>]\n".utf8))
+    FileHandle.standardError.write(Data("Aufruf: scanr-cli inquiry | caps | ghs [--raw] | status --watch | scan --dpi <n> [--duplex] [--overscan] --out <ordner> | job --profile rechnungen|auto|foto [--out <ordner>]\n".utf8))
     exit(2)
 }
 
@@ -162,12 +162,14 @@ case "caps":
 case "scan":
     var dpi: Int?
     var duplex = false
+    var overscan = false
     var out: String?
     var rest = args.dropFirst()
     while let a = rest.popFirst() {
         switch a {
         case "--dpi": dpi = rest.popFirst().flatMap(Int.init)
         case "--duplex": duplex = true
+        case "--overscan": overscan = true
         case "--out": out = rest.popFirst()
         default: usage()
         }
@@ -177,7 +179,7 @@ case "scan":
     do {
         let session = ScanSession(transport: try IOUSBHostTransport.open())
         var count = 0
-        for try await page in session.run(ScanSettings(dpi: dpi, duplex: duplex)) {
+        for try await page in session.run(ScanSettings(dpi: dpi, duplex: duplex, overscan: overscan)) {
             // Ordner erst anlegen, wenn wirklich eine Seite kommt (also Papier da war).
             if count == 0 {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

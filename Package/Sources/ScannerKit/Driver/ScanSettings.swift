@@ -5,9 +5,12 @@ public struct ScanSettings: Equatable, Sendable {
     public var dpi: Int
     /// Beide Seiten jedes Blatts.
     public var duplex: Bool
+    /// Rand um das Blatt (`overscan` in SANE). Bisher nur zum Ausprobieren über `scanr-cli`.
+    public var overscan: Bool
 
-    public init(dpi: Int, duplex: Bool) {
+    public init(dpi: Int, duplex: Bool, overscan: Bool = false) {
         self.dpi = dpi
         self.duplex = duplex
+        self.overscan = overscan
     }
 }

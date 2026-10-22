@@ -12,9 +12,12 @@ struct ScanGeometry: Equatable, Sendable {
     let pixelsPerLine: Int
     let lines: Int
 
-    init(dpi: Int, capabilities: ScannerCapabilities) {
+    /// Mit `overscan` kommt wie in `get_page_width` links und rechts der Overscan-Rand aus der
+    /// VPD dazu, höchstens bis zur Gerätebreite. Die Länge ist ohnehin schon das Gerätemaximum.
+    init(dpi: Int, capabilities: ScannerCapabilities, overscan: Bool = false) {
         self.dpi = dpi
-        pageWidth = min(Self.letterWidth, capabilities.maxX)
+        let margin = overscan ? 2 * capabilities.overscanX * 1200 / capabilities.basicXRes : 0
+        pageWidth = min(Self.letterWidth + margin, capabilities.maxX)
         pageHeight = capabilities.maxY
         // ppl_mod_by_mode[COLOR] = 2 beim iX500; Zeilen gerade wie in update_params.
         let ppl = dpi * pageWidth / 1200

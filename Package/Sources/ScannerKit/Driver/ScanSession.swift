@@ -74,14 +74,14 @@ public final class ScanSession: Sendable {
         guard !caps.needsDownloadedGamma else {
             throw ScannerError.protocolViolation("Gerät verlangt eine Gammatabelle, das ist nicht umgesetzt")
         }
-        let geometry = ScanGeometry(dpi: settings.dpi, capabilities: caps)
+        let geometry = ScanGeometry(dpi: settings.dpi, capabilities: caps, overscan: settings.overscan)
         let interlace: ColorInterlace
         if let known = caps.colorInterlace {
             interlace = known
         } else {
             interlace = try await probeInterlace(geometry, duplex: settings.duplex)
         }
-        try await configure(geometry, duplex: settings.duplex, interlace: interlace)
+        try await configure(geometry, duplex: settings.duplex, overscan: settings.overscan, interlace: interlace)
 
         // iX500 bricht OBJECT POSITION ohne Papier mit Fehler ab, also vorher nachsehen (hopper_before_op).
         guard try await transport.hardwareStatus().paperInHopper else {
@@ -116,7 +116,7 @@ public final class ScanSession: Sendable {
     }
 
     /// Einstellungen zu Beginn des Stapels, Reihenfolge wie in `sane_start`.
-    private func configure(_ g: ScanGeometry, duplex: Bool, interlace: ColorInterlace) async throws {
+    private func configure(_ g: ScanGeometry, duplex: Bool, overscan: Bool, interlace: ColorInterlace) async throws {
         let caps = capabilities
         // Ohne Flachbett und Rückweg schickt scanner_control für den Einzug keinen Befehl.
         if caps.hasScannerControl && (caps.hasFlatbed || caps.hasReturnPath) {
@@ -129,7 +129,7 @@ public final class ScanSession: Sendable {
             }
         }
         let pages: [(ModePage, [UInt8])] = [
-            (.auto, ModeSelectPayload.auto(lengthDetection: true)),
+            (.auto, ModeSelectPayload.auto(lengthDetection: true, overscan: overscan)),
             (.doubleFeed, ModeSelectPayload.doubleFeed()),
             (.background, ModeSelectPayload.background()),
             (.dropout, ModeSelectPayload.dropout()),

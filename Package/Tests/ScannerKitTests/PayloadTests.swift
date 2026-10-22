@@ -92,6 +92,20 @@ final class PayloadTests: XCTestCase {
         XCTAssertEqual(ModeSelectPayload.prepick(), h + [0x33, 6, 0, 0, 0, 0, 0, 0])
     }
 
+    func testModeSelectAutoWithOverscan() {
+        // set_MSEL_overscan(page, MSEL_ON): Byte 5, Bits 6 und 7.
+        let h: [UInt8] = [0, 0, 0, 0]
+        XCTAssertEqual(ModeSelectPayload.auto(lengthDetection: true, overscan: true), h + [0x3C, 6, 0, 0x80, 0, 0xC0, 0, 0])
+    }
+
+    func testOverscanWidensWindowUpToDeviceWidth() {
+        // 10200 + 2 * 153 * 1200 / 600 = 10812, begrenzt auf max_x 10448 (get_page_width).
+        let o = ScanGeometry(dpi: 300, capabilities: .iX500, overscan: true)
+        XCTAssertEqual(o.pageWidth, 10448)
+        XCTAssertEqual(o.pixelsPerLine, 2612)
+        XCTAssertEqual(o.pageHeight, 41424)
+    }
+
     func testPixelSize() throws {
         var b = [UInt8](repeating: 0, count: 32)
         b[2] = 0x09; b[3] = 0xF6        // 2550

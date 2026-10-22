@@ -13,10 +13,17 @@ enum ModeSelectPayload {
         return [UInt8](repeating: 0, count: headerLength) + p
     }
 
-    /// Automatik (`mode_select_auto`): nur ALD an (Byte 3 Bit 7). Breitenerkennung, Schräglagen-
-    /// korrektur und Overscan bleiben auf Vorgabe, denn sie zwängen SANE zum Puffern der ganzen Seite.
-    static func auto(lengthDetection: Bool) -> [UInt8] {
-        page(.auto) { $0[3] = lengthDetection ? 0x80 : 0 }
+    static let msOn: UInt8 = 3   // MSEL_ON
+
+    /// Automatik (`mode_select_auto`): ALD an (Byte 3 Bit 7). Breitenerkennung und Schräglagen-
+    /// korrektur bleiben auf Vorgabe, denn sie zwängen SANE zum Puffern der ganzen Seite.
+    /// Overscan (Byte 5 Bit 6 und 7, `set_MSEL_overscan`) liest Hintergrund vor und hinter dem
+    /// Blatt mit; ohne bleibt das Feld auf Vorgabe (0).
+    static func auto(lengthDetection: Bool, overscan: Bool = false) -> [UInt8] {
+        page(.auto) {
+            $0[3] = lengthDetection ? 0x80 : 0
+            if overscan { $0[5] = msOn << 6 }
+        }
     }
 
     /// Doppeleinzug (`mode_select_df`): Erkennung an mit Anhalten (`DF_STOP`, kein Continue-Bit)

@@ -43,6 +43,9 @@ public struct ScannerCapabilities: Equatable, Sendable {
     public var hasStapleDetect: Bool
     public var hasDoubleFeedRecovery: Bool
     public var hasAdvancedPaperProtect: Bool
+    /// Overscan-Rand in Einheiten der Grundauflösung (`os_x_basic`, `os_y_basic`), 0 ohne Overscan.
+    public var overscanX: Int
+    public var overscanY: Int
     /// Seiten, die MODE SENSE angenommen hat (`init_ms`). Kommt nicht aus der VPD.
     public var modePages: Set<ModePage>
     /// nil heißt: vor dem ersten Scan per SET WINDOW ermitteln (`init_interlace`).
@@ -87,6 +90,9 @@ public struct ScannerCapabilities: Equatable, Sendable {
         hasStapleDetect = payloadEnd >= 0x70 && bit(0x70, 4)
         hasDoubleFeedRecovery = payloadEnd >= 0x72 && vpd.count > 0x72 && vpd[0x72] & 0x0F != 0
         hasReturnPath = payloadEnd >= 0x7C && bit(0x7C, 7)
+        // Erst mit den 4 zusätzlichen Byte vorhanden (`init_vpd`); ältere Geräte melden dort Nullen.
+        overscanX = payloadEnd >= 0x68 && vpd.count >= 0x68 ? n(0x64, 2) : 0
+        overscanY = payloadEnd >= 0x68 && vpd.count >= 0x68 ? n(0x66, 2) : 0
         modePages = []
         colorInterlace = nil
     }
@@ -108,7 +114,7 @@ public struct ScannerCapabilities: Equatable, Sendable {
         hasFlatbed: false, hasReturnPath: false, hasEndorser: false, hasScannerControl: true,
         hasSendDiagnostic: true, hasReadDiagnostic: true, brightnessSteps: 0, contrastSteps: 0,
         internalGammaCount: 1, downloadGammaCount: 1, hasPaperProtect: false, hasStapleDetect: false,
-        hasDoubleFeedRecovery: false, hasAdvancedPaperProtect: false,
+        hasDoubleFeedRecovery: false, hasAdvancedPaperProtect: false, overscanX: 153, overscanY: 153,
         modePages: [.prepick, .background, .doubleFeed, .dropout, .buffer, .auto],
         colorInterlace: nil)
 
@@ -117,6 +123,7 @@ public struct ScannerCapabilities: Equatable, Sendable {
                 hasSendDiagnostic: Bool, hasReadDiagnostic: Bool, brightnessSteps: Int, contrastSteps: Int,
                 internalGammaCount: Int, downloadGammaCount: Int, hasPaperProtect: Bool, hasStapleDetect: Bool,
                 hasDoubleFeedRecovery: Bool, hasAdvancedPaperProtect: Bool,
+                overscanX: Int = 0, overscanY: Int = 0,
                 modePages: Set<ModePage>, colorInterlace: ColorInterlace?) {
         self.basicXRes = basicXRes; self.basicYRes = basicYRes
         self.maxX = maxX; self.maxY = maxY; self.minRes = minRes; self.maxRes = maxRes
@@ -127,6 +134,7 @@ public struct ScannerCapabilities: Equatable, Sendable {
         self.internalGammaCount = internalGammaCount; self.downloadGammaCount = downloadGammaCount
         self.hasPaperProtect = hasPaperProtect; self.hasStapleDetect = hasStapleDetect
         self.hasDoubleFeedRecovery = hasDoubleFeedRecovery; self.hasAdvancedPaperProtect = hasAdvancedPaperProtect
+        self.overscanX = overscanX; self.overscanY = overscanY
         self.modePages = modePages; self.colorInterlace = colorInterlace
     }
 }

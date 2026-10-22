@@ -1,4 +1,5 @@
 import AppKit
+import ScannerKit
 import SwiftUI
 
 @main
@@ -10,7 +11,8 @@ struct ScanrApp: App {
 
     init() {
         let notifier = SystemNotifier()
-        let controller = ScannerController(environment: .live(notifier: notifier))
+        let environment = ScannerEnvironment.live(notifier: notifier)
+        let controller = ScannerController(environment: environment)
         _controller = State(initialValue: controller)
         self.notifier = notifier
         // Als Testumgebung geladen: kein Gerät öffnen, keine Mitteilungen anfordern.
@@ -19,7 +21,10 @@ struct ScanrApp: App {
             return
         }
         notifier.activate()
-        controller.removeStaleTemps()
+        // Nicht auf dem Hauptthread: Fragt macOS erst nach dem Zugriff auf den Schreibtisch, hält
+        // das Lesen bis zur Antwort an, und so lange erschiene kein Symbol in der Menüleiste.
+        let outputDirectory = environment.outputDirectory
+        Task.detached(priority: .utility) { OutputFile.removeStaleTemps(in: outputDirectory) }
         let watcher = DeviceWatcher()
         self.watcher = watcher
         Task { await controller.run(arrivals: watcher.arrivals) }

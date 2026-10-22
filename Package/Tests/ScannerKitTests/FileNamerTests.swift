@@ -26,7 +26,7 @@ final class FileNamerTests: XCTestCase {
     }
 
     func namer(_ pattern: String = "{datum} scan {nr}") -> FileNamer {
-        FileNamer(pattern: pattern, calendar: calendar)
+        FileNamer(pattern: pattern, timeZone: calendar.timeZone)
     }
 
     func testEmptyFolderStartsAtOne() {
@@ -118,5 +118,18 @@ final class FileNamerTests: XCTestCase {
     func testPatternWithoutNumberGetsOneAppended() throws {
         let url = namer("{datum} Scan").nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
         XCTAssertEqual(url.lastPathComponent, "2026-10-22 Scan 01.pdf")
+    }
+
+    func testExistingNamesMatchCaseInsensitively() throws {
+        try touch("2026-10-22 SCAN 05.PDF")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 06.pdf")
+    }
+
+    func testNameIsGregorianRegardlessOfSystemCalendar() {
+        // Ein buddhistischer Kalender würde das Jahr 2569 liefern; der Namer nutzt immer gregorianisch.
+        let url = FileNamer(timeZone: TimeZone(identifier: "Asia/Bangkok")!)
+            .nextURL(in: dir, date: Date(timeIntervalSince1970: 1_792_000_000), profile: .auto, ext: "pdf")
+        XCTAssertTrue(url.lastPathComponent.hasPrefix("2026-"), url.lastPathComponent)
     }
 }

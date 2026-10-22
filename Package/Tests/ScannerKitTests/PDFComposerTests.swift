@@ -104,6 +104,7 @@ final class PDFComposerTests: XCTestCase {
 
     /// Größenmessung für den Bericht; die Schwellen sind grobe Schranken, keine Zielwerte.
     func testMeasuredSizes() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["SCANR_MEASURE"] == "1", "nur mit SCANR_MEASURE=1")
         let text = (1...30).map { "Zeile \($0): Rechnungsposition Nummer \($0 * 17) Betrag \($0 * 3),50 EUR" }
         let bwImage = TestPages.textPage(text, size: 40)
         let bw = PageProcessor.binarize(bwImage)
@@ -117,5 +118,88 @@ final class PDFComposerTests: XCTestCase {
         print("GROESSE sw=\(sBW / 1024) KB (\(lines.count) Zeilen erkannt) farbe=\(sCol / 1024) KB")
         XCTAssertLessThan(sBW, 400 * 1024)
         XCTAssertLessThan(sCol, 4 * 1024 * 1024)
+    }
+
+    // MARK: Einbettung und Schreibweg
+
+    /// Liest Bild-XObject der ersten Seite: (BitsPerComponent, Filter).
+    func firstImage(of url: URL) throws -> (bits: Int, filter: String) {
+        let doc = try XCTUnwrap(CGPDFDocument(url as CFURL))
+        let page = try XCTUnwrap(doc.page(at: 1))
+        var res: CGPDFDictionaryRef?
+        XCTAssertTrue(CGPDFDictionaryGetDictionary(try XCTUnwrap(page.dictionary), "Resources", &res))
+        var xo: CGPDFDictionaryRef?
+        XCTAssertTrue(CGPDFDictionaryGetDictionary(try XCTUnwrap(res), "XObject", &xo))
+        final class Box { var stream: CGPDFStreamRef? }
+        let box = Box()
+        CGPDFDictionaryApplyBlock(try XCTUnwrap(xo), { _, object, info in
+            var s: CGPDFStreamRef?
+            if CGPDFObjectGetValue(object, .stream, &s) {
+                Unmanaged<Box>.fromOpaque(info!).takeUnretainedValue().stream = s
+            }
+            return true
+        }, Unmanaged.passUnretained(box).toOpaque())
+        let dict = try XCTUnwrap(CGPDFStreamGetDictionary(try XCTUnwrap(box.stream)))
+        var bits: CGPDFInteger = 0
+        CGPDFDictionaryGetInteger(dict, "BitsPerComponent", &bits)
+        var filter = ""
+        var name: UnsafePointer<Int8>?
+        var arr: CGPDFArrayRef?
+        if CGPDFDictionaryGetName(dict, "Filter", &name), let name {
+            filter = String(cString: name)
+        } else if CGPDFDictionaryGetArray(dict, "Filter", &arr), let arr {
+            var first: UnsafePointer<Int8>?
+            // Letzter Filter einer Kette ist der Bildfilter (etwa DCTDecode).
+            let n = CGPDFArrayGetCount(arr)
+            if n > 0, CGPDFArrayGetName(arr, n - 1, &first), let first { filter = String(cString: first) }
+        }
+        return (Int(bits), filter)
+    }
+
+    func testOneBitPageIsEmbeddedAsOneBit() throws {
+        let bw = PageProcessor.binarize(TestPages.textPage(["Rechnung 4711"], size: 100))
+        let url = dir.appendingPathComponent("bw.pdf")
+        try PDFComposer.write([(TestPages.page(bw, isColor: false), [])], to: url)
+        XCTAssertEqual(try firstImage(of: url).bits, 1)
+    }
+
+    func testColorPageIsEmbeddedAsJPEG() throws {
+        let url = dir.appendingPathComponent("farbe.pdf")
+        try PDFComposer.write([(TestPages.page(TestPages.colorPage(dpi: 150), dpi: 150, isColor: true), [])], to: url)
+        XCTAssertEqual(try firstImage(of: url).filter, "DCTDecode")
+    }
+
+    func testPDFWriteToExistingDestinationThrowsAndKeepsFile() throws {
+        let url = dir.appendingPathComponent("da.pdf")
+        try Data("alt".utf8).write(to: url)
+        let page = TestPages.page(TestPages.textPage([], widthMM: 40, heightMM: 40, dpi: 150), dpi: 150)
+        XCTAssertThrowsError(try PDFComposer.write([(page, [])], to: url)) {
+            XCTAssertEqual($0 as? OutputError, .destinationExists)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), Data("alt".utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["da.pdf"])
+    }
+
+    func testJPEGWriteToExistingDestinationThrowsAndKeepsFile() throws {
+        let url = dir.appendingPathComponent("da.jpg")
+        try Data("alt".utf8).write(to: url)
+        let page = TestPages.page(TestPages.colorPage(dpi: 150), dpi: 150, isColor: true)
+        XCTAssertThrowsError(try JPEGWriter.write(page, quality: 0.8, to: url)) {
+            XCTAssertEqual($0 as? OutputError, .destinationExists)
+        }
+        XCTAssertEqual(try Data(contentsOf: url), Data("alt".utf8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["da.jpg"])
+    }
+
+    func testFailedWriteLeavesNothingBehind() throws {
+        let url = dir.appendingPathComponent("fehlt/x.pdf")   // Ordner existiert nicht
+        XCTAssertThrowsError(try PDFComposer.write([(TestPages.page(TestPages.colorPage(dpi: 150), dpi: 150), [])], to: url))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [])
+    }
+
+    func testSuccessfulWriteLeavesNoTempFile() throws {
+        let url = dir.appendingPathComponent("ok.pdf")
+        try PDFComposer.write([(TestPages.page(TestPages.textPage([], widthMM: 40, heightMM: 40, dpi: 150), dpi: 150), [])], to: url)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["ok.pdf"])
     }
 }

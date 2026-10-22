@@ -6,11 +6,19 @@ import Foundation
 /// der zweite Scan des Tages den ersten.
 public struct FileNamer: Sendable {
     public var pattern: String
-    public var calendar: Calendar
+    /// Zeitzone für `{datum}` und `{zeit}`; der Kalender ist immer gregorianisch,
+    /// damit die Namen nicht von den Systemeinstellungen (etwa buddhistischer Kalender) abhängen.
+    public var timeZone: TimeZone
 
-    public init(pattern: String = "{datum} scan {nr}", calendar: Calendar = .current) {
+    public init(pattern: String = "{datum} scan {nr}", timeZone: TimeZone = .current) {
         self.pattern = pattern
-        self.calendar = calendar
+        self.timeZone = timeZone
+    }
+
+    private var calendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        return cal
     }
 
     private enum Token {
@@ -67,7 +75,10 @@ public struct FileNamer: Sendable {
         s.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     }
 
-    /// Nächster freier Name: die Nummer über der höchsten, die im Ordner zu diesem Muster passt.
+    /// Nächster freier Name: die Nummer über der höchsten, die im Ordner zu diesem Muster passt
+    /// (Groß- und Kleinschreibung egal). Rechnet nur einen Namen aus und legt nichts an. Wer
+    /// schreibt, legt die Datei an, bevor er den nächsten Namen erfragt, und holt bei
+    /// `OutputError.destinationExists` einen neuen Namen.
     public func nextURL(in dir: URL, date: Date, profile: ScanProfile, ext: String) -> URL {
         let tokens = tokens()
         // Regulärer Ausdruck, der Dateien dieses Tages erkennt (beliebige Endung).
@@ -84,7 +95,7 @@ public struct FileNamer: Sendable {
         regex += "\\.[^./]+$"
 
         var highest = 0
-        if let re = try? NSRegularExpression(pattern: regex),
+        if let re = try? NSRegularExpression(pattern: regex, options: .caseInsensitive),
            let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
         {
             for name in names {

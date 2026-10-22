@@ -65,7 +65,8 @@ public struct ScanProfile: Codable, Equatable, Sendable, Identifiable {
         dpi = Self.allowedDPI.contains(rawDPI) ? rawDPI : (Self.startValue(forID: id)?.dpi ?? 300)
         colorMode = try c.decode(ColorMode.self, forKey: .colorMode)
         format = try c.decode(OutputFormat.self, forKey: .format)
-        jpegQuality = try c.decode(Double.self, forKey: .jpegQuality)
+        let q = try c.decode(Double.self, forKey: .jpegQuality)
+        jpegQuality = q.isNaN ? (Self.startValue(forID: id)?.jpegQuality ?? 0.6) : max(0, min(1, q))
         duplex = try c.decode(Bool.self, forKey: .duplex)
         removeBlankPages = try c.decode(Bool.self, forKey: .removeBlankPages)
     }
@@ -77,16 +78,22 @@ public struct ProfileStore: @unchecked Sendable {
     static let key = "scanProfiles"
     let defaults: UserDefaults
 
+    private struct Lossy: Decodable {
+        let profile: ScanProfile?
+        init(from decoder: Decoder) throws { profile = try? ScanProfile(from: decoder) }
+    }
+
     public init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 
     public func load() -> [ScanProfile] {
+        // Elementweise lesen: ein beschädigter Eintrag kostet nicht alle anderen.
         guard let data = defaults.data(forKey: Self.key),
-              let profiles = try? JSONDecoder().decode([ScanProfile].self, from: data),
-              !profiles.isEmpty
+              let boxes = try? JSONDecoder().decode([Lossy].self, from: data)
         else { return [.auto, .foto] }
-        return profiles
+        let profiles = boxes.compactMap(\.profile)
+        return profiles.isEmpty ? [.auto, .foto] : profiles
     }
 
     public func save(_ profiles: [ScanProfile]) {

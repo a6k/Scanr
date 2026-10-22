@@ -11,6 +11,12 @@ public enum PDFComposer {
         _ pages: [(ProcessedPage, [TextLine])], to url: URL, jpegQuality: Double = 0.6
     ) throws {
         guard !pages.isEmpty else { throw OutputError.noPages }
+        try OutputFile.writeAtomically(to: url) { temp in
+            try render(pages, to: temp, jpegQuality: jpegQuality)
+        }
+    }
+
+    private static func render(_ pages: [(ProcessedPage, [TextLine])], to url: URL, jpegQuality: Double) throws {
         guard let consumer = CGDataConsumer(url: url as CFURL) else { throw OutputError.cannotCreateFile }
         guard let ctx = CGContext(consumer: consumer, mediaBox: nil, nil) else { throw OutputError.cannotCreateFile }
 

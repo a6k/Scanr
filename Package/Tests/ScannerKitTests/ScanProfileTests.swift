@@ -71,4 +71,43 @@ final class ScanProfileTests: XCTestCase {
         defaults.set(data, forKey: ProfileStore.key)
         XCTAssertEqual(ProfileStore(defaults: defaults).load().first?.dpi, 300)
     }
+
+    func testBadEntryDoesNotDropGoodOnes() throws {
+        var custom = ScanProfile.auto
+        custom.id = "eigenes"
+        custom.name = "Eigenes"
+        custom.dpi = 200
+        let good = try JSONSerialization.jsonObject(with: JSONEncoder().encode(custom))
+        var bad = try XCTUnwrap(good as? [String: Any])
+        bad["colorMode"] = "unbekannt"
+        bad["id"] = "kaputt"
+        let data = try JSONSerialization.data(withJSONObject: [good, bad])
+        defaults.set(data, forKey: ProfileStore.key)
+        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [custom])
+    }
+
+    func testNothingDecodableGivesStartProfiles() throws {
+        defaults.set(try JSONSerialization.data(withJSONObject: [["x": 1]]), forKey: ProfileStore.key)
+        XCTAssertEqual(ProfileStore(defaults: defaults).load(), [.auto, .foto])
+    }
+
+    func testJpegQualityIsClampedOnDecode() throws {
+        var p = ScanProfile.foto
+        p.jpegQuality = 7
+        let data = try JSONEncoder().encode([p])
+        defaults.set(data, forKey: ProfileStore.key)
+        XCTAssertEqual(ProfileStore(defaults: defaults).load().first?.jpegQuality, 1)
+    }
+
+    func testNaNQualityFallsBackToStartValue() throws {
+        var p = ScanProfile.foto
+        p.jpegQuality = .nan
+        let enc = JSONEncoder()
+        enc.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        // Der Store nutzt Standard-Dekodierung; NaN erreicht ihn nur über eigene Dekodierung.
+        let dec = JSONDecoder()
+        dec.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        let back = try dec.decode(ScanProfile.self, from: enc.encode(p))
+        XCTAssertEqual(back.jpegQuality, 0.9)
+    }
 }

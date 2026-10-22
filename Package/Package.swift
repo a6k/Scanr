@@ -11,7 +11,7 @@ let package = Package(
     targets: [
         .target(name: "ScannerKit"),
         .executableTarget(name: "scanr-cli", dependencies: ["ScannerKit"]),
-        .testTarget(name: "ScannerKitTests", dependencies: ["ScannerKit"]),
+        .testTarget(name: "ScannerKitTests", dependencies: ["ScannerKit"], resources: [.copy("Fixtures")]),
     ],
     swiftLanguageModes: [.v6]
 )

@@ -15,6 +15,34 @@ nonisolated enum ProfileLibrary {
         return stored + startProfiles.filter { !ids.contains($0.id) }
     }
 
+    /// Ob ein Startprofil noch seine Startwerte hat, der Name zählt nicht.
+    /// `nil` bei eigenen Profilen, die keine Startwerte haben.
+    static func hasStartValues(_ profile: ScanProfile) -> Bool? {
+        guard var start = startValue(of: profile.id) else { return nil }
+        start.name = profile.name
+        return start == profile
+    }
+
+    static func isStartProfile(_ id: String) -> Bool {
+        startProfiles.contains { $0.id == id }
+    }
+
+    /// Startprofile in fester Reihenfolge vorn, eigene Profile dahinter in ihrer Reihenfolge.
+    static func ordered(_ profiles: [ScanProfile]) -> [ScanProfile] {
+        let start = startProfiles.compactMap { s in profiles.first { $0.id == s.id } }
+        return start + profiles.filter { !isStartProfile($0.id) }
+    }
+
+    /// „Neues Profil“, bei Namensgleichheit mit angehängter Zahl.
+    static func newName(among profiles: [ScanProfile]) -> String {
+        let base = "Neues Profil"
+        let names = Set(profiles.map(\.name))
+        guard names.contains(base) else { return base }
+        var n = 2
+        while names.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
+    }
+
     /// Das Profil zu `id`. Gibt es keins, „Rechnungen“, sonst das erste.
     static func active(id: String, in profiles: [ScanProfile]) -> ScanProfile {
         profiles.first { $0.id == id }

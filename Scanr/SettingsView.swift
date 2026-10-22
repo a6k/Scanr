@@ -157,27 +157,43 @@ final class NotificationPermission {
 
 // MARK: Profile
 
-/// Oben die Profile als Segmentschalter, darunter nur die Einstellungen des gewählten.
-/// Die Auswahl hier ändert nicht das aktive Profil, das bleibt im Menü.
+/// Oben ein Klappmenü mit den Profilen und Knöpfen zum Anlegen und Löschen,
+/// darunter nur die Einstellungen des gewählten. Die Auswahl hier ändert nicht
+/// das aktive Profil, das bleibt im Menü.
 private struct ProfileSettings: View {
     let controller: ScannerController
     @State private var shownID: String?
+    @State private var confirmDelete = false
 
     var body: some View {
-        let selectedID = shownID ?? controller.activeProfileID
+        let selectedID = controller.profiles.contains { $0.id == shownID }
+            ? shownID! : controller.activeProfileID
         Form {
             Section {
-                Picker("Profil", selection: Binding(
-                    get: { selectedID },
-                    set: { shownID = $0 }
-                )) {
-                    ForEach(controller.profiles) { profile in
-                        Text(profile.id == controller.activeProfileID ? "\(profile.name) •" : profile.name)
-                            .tag(profile.id)
+                HStack {
+                    Picker("Profil", selection: Binding(
+                        get: { selectedID },
+                        set: { shownID = $0 }
+                    )) {
+                        ForEach(controller.profiles) { profile in
+                            Text(profile.id == controller.activeProfileID ? "\(profile.name) •" : profile.name)
+                                .tag(profile.id)
+                        }
                     }
+                    Button {
+                        shownID = controller.addProfile(copying: selectedID)
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Kopie dieses Profils anlegen")
+                    Button {
+                        confirmDelete = true
+                    } label: {
+                        Image(systemName: "minus")
+                    }
+                    .help("Dieses Profil löschen")
+                    .disabled(!controller.canDelete(selectedID))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             } footer: {
                 Text("• = aktiv für die Scan-Taste, wechseln im Menü")
                     .font(.callout)
@@ -193,6 +209,17 @@ private struct ProfileSettings: View {
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "Profil „\(controller.profiles.first { $0.id == selectedID }?.name ?? "")“ löschen?",
+            isPresented: $confirmDelete
+        ) {
+            Button("Löschen", role: .destructive) {
+                controller.deleteProfile(selectedID)
+                shownID = nil
+            }
+        } message: {
+            Text("Die Einstellungen dieses Profils gehen verloren.")
+        }
     }
 }
 
@@ -202,6 +229,7 @@ private struct ProfileSection: View {
 
     var body: some View {
         Section {
+            TextField("Name", text: $profile.name)
             Picker("Auflösung", selection: $profile.dpi) {
                 ForEach(ScanProfile.allowedDPI, id: \.self) { Text("\($0) dpi").tag($0) }
             }
@@ -224,8 +252,10 @@ private struct ProfileSection: View {
             }
             Toggle("Duplex", isOn: $profile.duplex)
             Toggle("Leerseiten entfernen", isOn: $profile.removeBlankPages)
-            Button("Startwerte wiederherstellen", action: restore)
-                .disabled(ProfileLibrary.startValue(of: profile.id) == profile)
+            if let atStart = ProfileLibrary.hasStartValues(profile) {
+                Button("Startwerte wiederherstellen", action: restore)
+                    .disabled(atStart)
+            }
         }
     }
 }

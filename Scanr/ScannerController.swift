@@ -113,7 +113,7 @@ final class ScannerController {
     init(environment: ScannerEnvironment) {
         self.environment = environment
         store = ProfileStore(defaults: environment.defaults)
-        let profiles = ProfileLibrary.completed(store.load())
+        let profiles = ProfileLibrary.ordered(ProfileLibrary.completed(store.load()))
         self.profiles = profiles
         activeProfileID = ProfileLibrary.active(id: store.activeProfileID, in: profiles).id
         fileNamePattern = environment.defaults.string(forKey: Self.patternKey) ?? Self.defaultPattern
@@ -140,9 +140,38 @@ final class ScannerController {
         store.save(profiles)
     }
 
+    /// Setzt die Werte zurück, ein vergebener Name bleibt.
     func restoreStartValues(of id: String) {
-        guard let start = ProfileLibrary.startValue(of: id) else { return }
+        guard var start = ProfileLibrary.startValue(of: id),
+              let current = profiles.first(where: { $0.id == id }) else { return }
+        start.name = current.name
         update(start)
+    }
+
+    /// Legt eine Kopie von `id` als eigenes Profil an und gibt die neue id zurück.
+    @discardableResult
+    func addProfile(copying id: String) -> String {
+        var copy = profiles.first { $0.id == id } ?? profile
+        copy.id = UUID().uuidString
+        copy.name = ProfileLibrary.newName(among: profiles)
+        profiles.append(copy)
+        store.save(profiles)
+        return copy.id
+    }
+
+    /// Nur eigene Profile lassen sich löschen.
+    func canDelete(_ id: String) -> Bool {
+        !ProfileLibrary.isStartProfile(id) && profiles.contains { $0.id == id }
+    }
+
+    /// Löscht ein eigenes Profil. War es aktiv, wird „Rechnungen“ aktiv.
+    func deleteProfile(_ id: String) {
+        guard canDelete(id) else { return }
+        profiles.removeAll { $0.id == id }
+        store.save(profiles)
+        if activeProfileID == id {
+            selectProfile(ScanProfile.rechnungen.id)
+        }
     }
 
     /// Ein leeres Muster ergäbe nur die Nummer, dann gilt das Standardmuster.

@@ -41,7 +41,8 @@ struct ProfileLibraryTests {
         let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
         ProfileStore(defaults: rig.defaults).save([.auto, .foto])
         let c = rig.controller()
-        #expect(c.profiles.map(\.id) == ["auto", "foto", "rechnungen"])
+        // ergänzt und in die feste Reihenfolge der Startprofile gebracht
+        #expect(c.profiles.map(\.id) == ["rechnungen", "auto", "foto"])
         #expect(c.profile.id == "rechnungen")
     }
 
@@ -66,6 +67,65 @@ struct ProfileLibraryTests {
         c.update(auto)
         c.restoreStartValues(of: "auto")
         #expect(c.profiles.first { $0.id == "auto" } == .auto)
+    }
+
+    @Test func addCopiesTheShownProfileUnderANewName() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        let id = c.addProfile(copying: "foto")
+        let neu = c.profiles.first { $0.id == id }!
+        #expect(neu.name == "Neues Profil")
+        #expect(neu.dpi == ScanProfile.foto.dpi && neu.format == ScanProfile.foto.format)
+        #expect(c.profiles.map(\.id).last == id)
+        #expect(rig.controller().profiles.contains { $0.id == id })   // gespeichert
+    }
+
+    @Test func secondNewProfileGetsANumber() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        _ = c.addProfile(copying: "auto")
+        let id = c.addProfile(copying: "auto")
+        #expect(c.profiles.first { $0.id == id }?.name == "Neues Profil 2")
+    }
+
+    @Test func startProfilesCannotBeDeleted() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        c.deleteProfile("auto")
+        #expect(c.profiles.contains { $0.id == "auto" })
+        #expect(!c.canDelete("auto"))
+    }
+
+    @Test func deletingTheActiveProfileActivatesRechnungen() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        let id = c.addProfile(copying: "foto")
+        c.selectProfile(id)
+        #expect(c.canDelete(id))
+        c.deleteProfile(id)
+        #expect(!c.profiles.contains { $0.id == id })
+        #expect(c.activeProfileID == "rechnungen")
+        #expect(rig.controller().activeProfileID == "rechnungen")
+    }
+
+    @Test func renamedStartProfileKeepsItsNameOnRestore() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        var auto = ScanProfile.auto
+        auto.name = "Briefe"
+        auto.dpi = 600
+        c.update(auto)
+        c.restoreStartValues(of: "auto")
+        let restored = c.profiles.first { $0.id == "auto" }!
+        #expect(restored.name == "Briefe")
+        #expect(restored.dpi == ScanProfile.auto.dpi)
+    }
+
+    @Test func startProfilesComeFirst() {
+        var eigen = ScanProfile.auto
+        eigen.id = "eigen"
+        let ordered = ProfileLibrary.ordered([eigen, .foto, .auto, .rechnungen])
+        #expect(ordered.map(\.id) == ["rechnungen", "auto", "foto", "eigen"])
     }
 
     @Test func jpegQualityOnlyWhereItMatters() {

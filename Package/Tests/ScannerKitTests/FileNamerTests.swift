@@ -1,0 +1,122 @@
+import XCTest
+@testable import ScannerKit
+
+final class FileNamerTests: XCTestCase {
+    var dir: URL!
+    var calendar: Calendar!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("scanr-namer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        calendar = cal
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 9, _ min: Int = 5) -> Date {
+        calendar.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
+    }
+
+    func touch(_ name: String) throws {
+        try Data().write(to: dir.appendingPathComponent(name))
+    }
+
+    func namer(_ pattern: String = "{datum} scan {nr}") -> FileNamer {
+        FileNamer(pattern: pattern, calendar: calendar)
+    }
+
+    func testEmptyFolderStartsAtOne() {
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 01.pdf")
+        XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL, dir.standardizedFileURL)
+    }
+
+    func testTakesHighestPlusOneAndDoesNotFillGaps() throws {
+        try touch("2026-10-22 scan 01.pdf")
+        try touch("2026-10-22 scan 03.pdf")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 04.pdf")
+    }
+
+    func testPreviousDayDoesNotCount() throws {
+        try touch("2026-10-21 scan 07.pdf")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 01.pdf")
+    }
+
+    func testPdfAndJpgShareOneCounter() throws {
+        try touch("2026-10-22 scan 02.jpg")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .foto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 03.pdf")
+    }
+
+    func testUnrelatedFilesAreIgnored() throws {
+        try touch("2026-10-22 scan 09 Kopie.pdf")
+        try touch("2026-10-22 scan.pdf")
+        try touch("x2026-10-22 scan 08.pdf")
+        try touch("2026-10-22 scan 05.pdf")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 06.pdf")
+    }
+
+    func testThreeDigitsAboveNinetyNine() throws {
+        try touch("2026-10-22 scan 99.pdf")
+        let url = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 100.pdf")
+        try touch("2026-10-22 scan 100.pdf")
+        let next = namer().nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "jpg")
+        XCTAssertEqual(next.lastPathComponent, "2026-10-22 scan 101.jpg")
+    }
+
+    func testTimePlaceholder() {
+        let url = namer("{datum} {zeit} {nr}").nextURL(
+            in: dir, date: date(2026, 10, 22, 14, 7), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 14-07 01.pdf")
+    }
+
+    func testCounterIgnoresTimeOfExistingFiles() throws {
+        try touch("2026-10-22 14-07 01.pdf")
+        let url = namer("{datum} {zeit} {nr}").nextURL(
+            in: dir, date: date(2026, 10, 22, 15, 30), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 15-30 02.pdf")
+    }
+
+    func testProfilePlaceholder() {
+        let n = namer("{profil} {datum} {nr}")
+        XCTAssertEqual(n.nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf").lastPathComponent,
+                       "Auto 2026-10-22 01.pdf")
+        XCTAssertEqual(n.nextURL(in: dir, date: date(2026, 10, 22), profile: .foto, ext: "jpg").lastPathComponent,
+                       "Foto 2026-10-22 01.jpg")
+    }
+
+    func testUnknownPlaceholderStaysLiteral() {
+        let url = namer("{ort} {nr}").nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "{ort} 01.pdf")
+    }
+
+    func testIllegalCharactersAreReplaced() {
+        var p = ScanProfile.auto
+        p.name = "A/B:C"
+        let url = namer("{profil} {nr}").nextURL(in: dir, date: date(2026, 10, 22), profile: p, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "A-B-C 01.pdf")
+        let url2 = namer("a/b: {nr}").nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url2.lastPathComponent, "a-b- 01.pdf")
+    }
+
+    func testProfileNameWithRegexCharactersCountsExistingFiles() throws {
+        var p = ScanProfile.auto
+        p.name = "A.(1)"
+        try touch("A.(1) 04.pdf")
+        let url = namer("{profil} {nr}").nextURL(in: dir, date: date(2026, 10, 22), profile: p, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "A.(1) 05.pdf")
+    }
+
+    func testPatternWithoutNumberGetsOneAppended() throws {
+        let url = namer("{datum} Scan").nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "2026-10-22 Scan 01.pdf")
+    }
+}

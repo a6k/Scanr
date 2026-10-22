@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# Hält Commits auf, die eine Apple-Team-ID enthalten.
+#
+# Xcode schreibt DEVELOPMENT_TEAM beim Signieren mitunter in die project.pbxproj zurück,
+# etwa nach einer Änderung im Team-Auswahlfeld. Das Repo ist öffentlich, die ID gehört
+# nach Local.xcconfig, das nicht im Repo liegt.
+#
+# Geprüft werden nur die gestagten Änderungen, also genau das, was in den Commit ginge.
+#
+# Umgehen (nur wenn sicher): git commit --no-verify
+
+set -eu
+
+found=$(git diff --cached -U0 --diff-filter=ACM \
+        | grep -nE '^\+.*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*"?[A-Z0-9]{10}"?' || true)
+
+if [ -n "$found" ]; then
+    cat >&2 <<'MESSAGE'
+
+  Commit gestoppt: In den gestagten Änderungen steht eine Apple-Team-ID.
+
+  Die ID gehört nach Local.xcconfig (über .gitignore ausgeschlossen),
+  nicht in die project.pbxproj. Rückgängig machen:
+
+      git restore --staged --worktree Scanr.xcodeproj/project.pbxproj
+
+  Stammt die Zeile aus einer anderen Datei, zeigt die Fundstelle unten, wo sie steht.
+
+MESSAGE
+    printf '%s\n\n' "$found" >&2
+    exit 1
+fi
+
+exit 0

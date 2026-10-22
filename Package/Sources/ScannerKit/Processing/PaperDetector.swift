@@ -178,8 +178,8 @@ enum PaperDetector {
 
         var l = lRho.map { $0 + edgeInset } ?? ns.min()!
         var r = rRho.map { $0 - edgeInset } ?? ns.max()!
-        var t = haveEnds ? top + edgeInset : top
-        var b = haveEnds ? bottom - edgeInset : bottom
+        let t = haveEnds ? top + edgeInset : top
+        let b = haveEnds ? bottom - edgeInset : bottom
 
         // Fehlt eine Seite, liegt sie am Bildrand: so weit nach innen ziehen, bis die Ecken im Bild liegen.
         if lRho == nil || rRho == nil {

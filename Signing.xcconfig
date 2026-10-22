@@ -1,0 +1,10 @@
+// Signierung. Die Team-ID steht absichtlich nicht in dieser Datei.
+//
+// Das Repo ist öffentlich, die Team-ID gehört einer Person. Sie kommt aus
+// `Local.xcconfig`, das über `.gitignore` außerhalb des Repos bleibt. Inhalt dort:
+//
+//     DEVELOPMENT_TEAM = <zehnstellige Team-ID>
+//
+// Das Fragezeichen macht den Include optional: Ohne die Datei baut das Projekt weiter,
+// nur das Signieren mit dem eigenen Team fehlt dann.
+#include? "Local.xcconfig"

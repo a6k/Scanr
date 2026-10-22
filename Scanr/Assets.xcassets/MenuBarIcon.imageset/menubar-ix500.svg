@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Scanr: ScanSnap iX500 von vorn, eigene Zeichnung, GPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="18" viewBox="0 0 300 270">
+  <!-- Blatt in der Rutsche, nach hinten geneigt -->
+  <path fill="black" fill-rule="evenodd" d="M96 14 H204 Q212 14 213 22 L222 100 H78 L87 22 Q88 14 96 14 Z
+     M112 42 H188 V52 H112 Z M110 66 H190 V76 H110 Z"/>
+  <!-- Seitenführungen der Rutsche -->
+  <path fill="black" d="M62 104 L74 40 Q76 34 81 36 L84 38 L72 104 Z M238 104 L226 40 Q224 34 219 36 L216 38 L228 104 Z"/>
+  <!-- Gehäuse, unten breiter, mit Ausgabeschlitz und Taste -->
+  <path fill="black" fill-rule="evenodd" d="M58 98 H242 Q262 98 265 118 L276 196 Q279 216 258 216 H42 Q21 216 24 196 L35 118 Q38 98 58 98 Z
+     M70 176 H230 Q236 176 236 182 Q236 188 230 188 H70 Q64 188 64 182 Q64 176 70 176 Z
+     M222 138 m-11 0 a11 11 0 1 0 22 0 a11 11 0 1 0 -22 0 Z"/>
+  <!-- Ablage vorn -->
+  <path fill="black" d="M58 228 H242 L256 254 Q258 260 251 260 H49 Q42 260 44 254 Z"/>
+</svg>

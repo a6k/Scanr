@@ -29,8 +29,15 @@ struct ScanrApp: App {
         MenuBarExtra {
             MenuView(controller: controller)
         } label: {
-            Image(systemName: controller.isScanning ? "doc.viewfinder" : "scanner")
-                .accessibilityLabel("Scanr")
+            Group {
+                if controller.isScanning {
+                    Image(systemName: "doc.viewfinder")
+                } else {
+                    // Eigene Zeichnung des iX500, als Vorlage für helle und dunkle Leiste
+                    Image("MenuBarIcon")
+                }
+            }
+            .accessibilityLabel("Scanr")
         }
         Settings {
             SettingsView(controller: controller, loginItem: loginItem)

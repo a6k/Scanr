@@ -157,12 +157,33 @@ final class NotificationPermission {
 
 // MARK: Profile
 
+/// Oben die Profile als Segmentschalter, darunter nur die Einstellungen des gewählten.
+/// Die Auswahl hier ändert nicht das aktive Profil, das bleibt im Menü.
 private struct ProfileSettings: View {
     let controller: ScannerController
+    @State private var shownID: String?
 
     var body: some View {
+        let selectedID = shownID ?? controller.activeProfileID
         Form {
-            ForEach(controller.profiles) { profile in
+            Section {
+                Picker("Profil", selection: Binding(
+                    get: { selectedID },
+                    set: { shownID = $0 }
+                )) {
+                    ForEach(controller.profiles) { profile in
+                        Text(profile.id == controller.activeProfileID ? "\(profile.name) •" : profile.name)
+                            .tag(profile.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            } footer: {
+                Text("• = aktiv für die Scan-Taste, wechseln im Menü")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            if let profile = controller.profiles.first(where: { $0.id == selectedID }) {
                 ProfileSection(profile: Binding(
                     get: { controller.profiles.first { $0.id == profile.id } ?? profile },
                     set: { controller.update($0) }
@@ -180,7 +201,7 @@ private struct ProfileSection: View {
     let restore: () -> Void
 
     var body: some View {
-        Section(profile.name) {
+        Section {
             Picker("Auflösung", selection: $profile.dpi) {
                 ForEach(ScanProfile.allowedDPI, id: \.self) { Text("\($0) dpi").tag($0) }
             }

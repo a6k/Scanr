@@ -3,38 +3,48 @@ import Foundation
 import os
 import Vision
 
-/// Erkennt eine auf dem Kopf liegende Seite, etwa einen verkehrt herum eingelegten Bon.
+/// Erkennt die Lage einer Seite und richtet sie auf: auf dem Kopf (180 Grad) oder quer
+/// eingelegt (90 Grad nach links oder rechts).
 ///
 /// Vision hat keine eigene Erkennung der Leserichtung (Stand macOS 27 SDK). Die genaue
-/// Texterkennung liest umgekehrten Text aber richtig und liefert die Zeilen dann mit vertauschten
-/// Ecken: die obere linke liegt rechts von der oberen rechten. Ein Durchgang auf einer verkleinerten
-/// Kopie reicht, gemessen rund 0,1 s je Seite. Die schnelle Stufe taugt nicht: Sie liest
-/// umgekehrten Text als Zeichensalat und meldet trotzdem hohe Sicherheit (2026-10-23 am echten
-/// Bon gemessen). Quer liegende Seiten (90 Grad) prüft das nicht.
+/// Texterkennung liest gedrehten Text aber richtig und liefert jede Zeile mit ihren Ecken, wie
+/// sie im Bild liegen. Die Richtung von der oberen linken zur oberen rechten Ecke ist die
+/// Leserichtung. Ein Durchgang auf einer verkleinerten Kopie reicht, rund 0,1 s je Seite; am
+/// echten Bon lagen in jeder der vier Lagen alle erkannten Zeichen in genau einer Richtung.
+/// Die schnelle Stufe taugt nicht: Sie liest gedrehten Text als Zeichensalat und meldet trotzdem
+/// hohe Sicherheit (2026-10-23 gemessen).
 public enum ReadingDirection {
     /// Längste Seite der Probe in Pixeln. Bon-Text bei 300 dpi bleibt dabei lesbar.
     static let probeSide = 1600
-    /// So viele Zeichen müssen in umgekehrten Zeilen stehen. Darunter gilt die Seite als
+    /// So viele Zeichen müssen in der gewinnenden Richtung stehen. Darunter gilt die Seite als
     /// textlos (Foto, Leerseite, Stempel) und bleibt, wie sie ist.
     static let minimumCharacters = 20
     static let log = Logger(subsystem: "app.comodin.Scanr", category: "orientation")
 
-    /// Die Seite, um 180 Grad gedreht, wenn sie auf dem Kopf liegt; sonst unverändert.
+    /// Die Seite in Leserichtung; unverändert, wenn sie schon so liegt oder zu wenig Text hat.
     public static func upright(_ image: CGImage) -> CGImage {
-        guard isUpsideDown(image), let turned = rotated180(image) else { return image }
+        let turns = quarterTurnsNeeded(image)
+        guard turns != 0, let turned = rotated(image, quarterTurns: turns) else { return image }
         return turned
     }
 
-    /// Wahr, wenn die Mehrheit der erkannten Zeichen in umgekehrt liegenden Zeilen steht.
-    static func isUpsideDown(_ image: CGImage) -> Bool {
-        guard let probe = scaled(image, maxSide: probeSide) else { return false }
-        let (normal, reversed) = characters(probe)
-        log.debug("Leserichtung: Zeichen normal \(normal, privacy: .public), umgekehrt \(reversed, privacy: .public)")
-        return reversed >= minimumCharacters && reversed > normal
+    /// Vierteldrehungen gegen den Uhrzeigersinn (0 bis 3), die die Seite aufrichten.
+    static func quarterTurnsNeeded(_ image: CGImage) -> Int {
+        guard let probe = scaled(image, maxSide: probeSide) else { return 0 }
+        let chars = characters(probe)
+        let total = chars.reduce(0, +)
+        guard let best = chars.indices.max(by: { chars[$0] < chars[$1] }) else { return 0 }
+        log.debug("Leserichtung: Zeichen je Richtung \(chars, privacy: .public)")
+        // Die gewinnende Richtung braucht genug Text und mehr als die Hälfte aller Zeichen.
+        guard chars[best] >= minimumCharacters, chars[best] * 2 > total else { return 0 }
+        // Läuft der Text in Richtung best × 90 Grad (gegen den Uhrzeigersinn gemessen), dreht
+        // die Gegenrichtung ihn waagerecht.
+        return (4 - best) % 4
     }
 
-    /// Erkannte Zeichen in normal und in umgekehrt liegenden Zeilen.
-    static func characters(_ image: CGImage) -> (normal: Int, reversed: Int) {
+    /// Erkannte Zeichen je Leserichtung: Index 0 waagerecht nach rechts, 1 nach oben, 2 nach links
+    /// (auf dem Kopf), 3 nach unten. Gemessen gegen den Uhrzeigersinn, y nach oben wie bei Vision.
+    static func characters(_ image: CGImage) -> [Int] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
@@ -43,14 +53,19 @@ public enum ReadingDirection {
             try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         } catch {
             log.error("Leserichtung nicht prüfbar: \(String(describing: error), privacy: .public)")
-            return (0, 0)
+            return [0, 0, 0, 0]
         }
-        var normal = 0, reversed = 0
+        var chars = [0, 0, 0, 0]
         for obs in request.results ?? [] {
             let count = obs.topCandidates(1).first?.string.count ?? 0
-            if obs.topRight.x >= obs.topLeft.x { normal += count } else { reversed += count }
+            // In Pixeln, damit ein schmales Bild die Winkel nicht verzerrt.
+            let dx = Double(obs.topRight.x - obs.topLeft.x) * Double(image.width)
+            let dy = Double(obs.topRight.y - obs.topLeft.y) * Double(image.height)
+            var degrees = atan2(dy, dx) * 180 / .pi
+            if degrees < 0 { degrees += 360 }
+            chars[Int((degrees + 45) / 90) % 4] += count
         }
-        return (normal, reversed)
+        return chars
     }
 
     static func scaled(_ image: CGImage, maxSide: Int) -> CGImage? {
@@ -67,19 +82,27 @@ public enum ReadingDirection {
         return ctx.makeImage()
     }
 
-    /// Dieselbe Seite um 180 Grad gedreht, in Größe, Farbraum und Pixelformat des Originals.
-    static func rotated180(_ image: CGImage) -> CGImage? {
+    /// Dieselbe Seite um `quarterTurns` × 90 Grad gegen den Uhrzeigersinn gedreht, in Farbraum
+    /// und Pixelformat des Originals. Bei einer Vierteldrehung tauschen Breite und Höhe.
+    static func rotated(_ image: CGImage, quarterTurns: Int) -> CGImage? {
+        let turns = ((quarterTurns % 4) + 4) % 4
         let w = image.width, h = image.height
+        let (outW, outH) = turns % 2 == 0 ? (w, h) : (h, w)
         let space = image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
-            data: nil, width: w, height: h, bitsPerComponent: image.bitsPerComponent, bytesPerRow: 0,
+            data: nil, width: outW, height: outH, bitsPerComponent: image.bitsPerComponent, bytesPerRow: 0,
             space: space, bitmapInfo: image.bitmapInfo.rawValue)
             ?? CGContext(
-                data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                data: nil, width: outW, height: outH, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
         else { return nil }
-        ctx.translateBy(x: CGFloat(w), y: CGFloat(h))
-        ctx.rotate(by: .pi)
+        // CoreGraphics zählt y nach oben, ein positiver Winkel dreht gegen den Uhrzeigersinn.
+        switch turns {
+        case 1: ctx.translateBy(x: CGFloat(h), y: 0); ctx.rotate(by: .pi / 2)
+        case 2: ctx.translateBy(x: CGFloat(w), y: CGFloat(h)); ctx.rotate(by: .pi)
+        case 3: ctx.translateBy(x: 0, y: CGFloat(w)); ctx.rotate(by: -.pi / 2)
+        default: break
+        }
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
         return ctx.makeImage()
     }

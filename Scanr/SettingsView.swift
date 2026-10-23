@@ -275,14 +275,15 @@ private struct ProfileSettings: View {
                     Button {
                         shownID = controller.addProfile(copying: selectedID)
                     } label: {
-                        Image(systemName: "plus")
+                        // Feste Höhe: das Minus-Symbol ist flacher, der Knopf wäre sonst niedriger.
+                        Image(systemName: "plus").frame(width: 16, height: 16)
                     }
                     .help("Kopie dieses Profils anlegen")
                     .accessibilityLabel("Profil kopieren")
                     Button {
                         confirmDelete = true
                     } label: {
-                        Image(systemName: "minus")
+                        Image(systemName: "minus").frame(width: 16, height: 16)
                     }
                     .help("Dieses Profil löschen")
                     .accessibilityLabel("Profil löschen")

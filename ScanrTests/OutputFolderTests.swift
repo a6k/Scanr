@@ -105,6 +105,21 @@ struct OutputFolderTests {
         await c.scanTask?.value
     }
 
+    @Test func newFolderKeepsARealScanResult() async throws {
+        let dir = try Self.makeFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rig = Rig { clock in FakeOpener([.success(FakeTransport([.status(button: true)], clock: clock))]) }
+        rig.jobs.result = ScanResult(files: [], pages: 0, error: .scanner(.paperJam), scannerError: .paperJam)
+        let c = rig.controller()
+        _ = await c.step()
+        await c.scanTask?.value
+        #expect(c.lastMessage?.title == "Scan fehlgeschlagen")
+
+        #expect(c.chooseOutputDirectory(dir) == nil)
+
+        #expect(c.lastMessage?.title == "Scan fehlgeschlagen")
+    }
+
     @Test func scanGoesToTheChosenFolder() async throws {
         let dir = try Self.makeFolder()
         defer { try? FileManager.default.removeItem(at: dir) }

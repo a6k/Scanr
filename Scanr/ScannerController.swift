@@ -93,6 +93,7 @@ final class ScannerController {
     static let outputDirectoryKey = "outputDirectory"
     static let defaultPattern = FileNamer().pattern
     static let coverOpenText = "Klappe offen, bitte schließen"
+    static let notStartedTitle = "Scan nicht gestartet"
 
     private(set) var state: State = .disconnected
     private(set) var profiles: [ScanProfile]
@@ -139,7 +140,8 @@ final class ScannerController {
         let dir = url.standardizedFileURL
         guard Self.canWrite(in: dir) else { return Self.notWritableText(dir) }
         outputDirectory = dir
-        lastMessage = nil   // eine alte „Ablage nicht gefunden“ gilt nicht mehr
+        // Eine alte „Ablage nicht gefunden“ gilt nicht mehr; ein echtes Scan-Ergebnis bleibt stehen.
+        if lastMessage?.title == Self.notStartedTitle { lastMessage = nil }
         environment.defaults.set(dir.path, forKey: Self.outputDirectoryKey)
         return nil
     }
@@ -248,13 +250,13 @@ final class ScannerController {
         guard canScan, let transport else { return }
         guard outputDirectoryExists else {
             report(ResultMessage(
-                title: "Scan nicht gestartet", body: "Ablage nicht gefunden: \(outputDirectory.path)", files: []))
+                title: Self.notStartedTitle, body: "Ablage nicht gefunden: \(outputDirectory.path)", files: []))
             return
         }
         // Vor dem Einzug prüfen: sonst fiele ein nicht beschreibbarer Ordner (etwa „Nicht erlauben“
         // bei der Rückfrage von macOS) erst nach Scan und Texterkennung des ganzen Stapels auf.
         guard Self.canWrite(in: outputDirectory) else {
-            report(ResultMessage(title: "Scan nicht gestartet", body: Self.notWritableText(outputDirectory), files: []))
+            report(ResultMessage(title: Self.notStartedTitle, body: Self.notWritableText(outputDirectory), files: []))
             return
         }
         lastMessage = nil   // während des Scans zählt der Status, danach das neue Ergebnis
@@ -326,7 +328,7 @@ final class ScannerController {
             let pressed = status.scanButton && !buttonWasDown
             buttonWasDown = status.scanButton
             if pressed && status.coverOpen {
-                report(ResultMessage(title: "Scan nicht gestartet", body: Self.coverOpenText, files: []))
+                report(ResultMessage(title: Self.notStartedTitle, body: Self.coverOpenText, files: []))
             } else if pressed {
                 scanNow()
             }

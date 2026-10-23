@@ -16,6 +16,8 @@ no update service.
   and business cards keep their real size instead of being padded to A4.
 - **Text recognition** with Apple's Vision framework. PDFs get an invisible text layer,
   so you can search and copy text.
+- **Reading direction**: a sheet fed upside down or sideways is turned the right way up,
+  judged by its text. Pages without text stay as they came.
 - **Three profiles** to start with, plus your own:
   - *Rechnungen*: 300 dpi, always black and white (1 bit), PDF. About 25 to 50 KB per
     A4 page.

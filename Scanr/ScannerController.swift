@@ -90,6 +90,7 @@ final class ScannerController {
     static let reconnectFallback: Duration = .seconds(15)
     nonisolated static let log = Logger(subsystem: "app.comodin.Scanr", category: "scanner")
     static let patternKey = "fileNamePattern"
+    static let outputDirectoryKey = "outputDirectory"
     static let defaultPattern = FileNamer().pattern
     static let coverOpenText = "Klappe offen, bitte schließen"
 
@@ -99,6 +100,8 @@ final class ScannerController {
     var fileNamePattern: String {
         didSet { environment.defaults.set(fileNamePattern, forKey: Self.patternKey) }
     }
+    /// Ablage der Scans. Ohne eigene Wahl der Ordner aus der Umgebung (Schreibtisch).
+    private(set) var outputDirectory: URL
 
     @ObservationIgnored private let environment: ScannerEnvironment
     @ObservationIgnored private let store: ProfileStore
@@ -117,6 +120,35 @@ final class ScannerController {
         self.profiles = profiles
         activeProfileID = ProfileLibrary.active(id: store.activeProfileID, in: profiles).id
         fileNamePattern = environment.defaults.string(forKey: Self.patternKey) ?? Self.defaultPattern
+        outputDirectory = environment.defaults.string(forKey: Self.outputDirectoryKey)
+            .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? environment.outputDirectory
+    }
+
+    // MARK: Ablage
+
+    /// Der Ordner aus der Umgebung, also der Schreibtisch.
+    var defaultOutputDirectory: URL { environment.outputDirectory }
+
+    /// Übernimmt einen neuen Ablageordner, wenn Scanr dort schreiben kann, und gibt sonst den
+    /// Grund zurück. Die Probedatei löst die Rückfrage von macOS für geschützte Ordner
+    /// (Schreibtisch, Dokumente, Laufwerke) gleich beim Wechsel aus, nicht erst beim Scan. Sie
+    /// trägt das Muster der Temp-Dateien, ein Rest würde also beim Start aufgeräumt.
+    func chooseOutputDirectory(_ url: URL) -> String? {
+        let dir = url.standardizedFileURL
+        let probe = dir.appendingPathComponent(".scanr-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(atPath: probe.path, contents: Data()) else {
+            return "In „\(dir.lastPathComponent)“ kann Scanr nicht schreiben."
+        }
+        try? FileManager.default.removeItem(at: probe)
+        outputDirectory = dir
+        environment.defaults.set(dir.path, forKey: Self.outputDirectoryKey)
+        return nil
+    }
+
+    /// Gibt es den Ablageordner noch? Ein gelöschter Ordner oder ein abgezogenes Laufwerk nicht.
+    var outputDirectoryExists: Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: outputDirectory.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     // MARK: Profile
@@ -183,7 +215,7 @@ final class ScannerController {
     /// Name, den der nächste Scan mit dem aktiven Profil bekäme.
     func previewName(date: Date = Date()) -> String {
         let ext = profile.format == .pdf ? "pdf" : "jpg"
-        return namer.nextURL(in: environment.outputDirectory, date: date, profile: profile, ext: ext).lastPathComponent
+        return namer.nextURL(in: outputDirectory, date: date, profile: profile, ext: ext).lastPathComponent
     }
 
     // MARK: Aufräumen
@@ -191,7 +223,7 @@ final class ScannerController {
     /// Löscht Temp-Dateien eines abgestürzten Laufs im Ausgabeordner (älter als eine Stunde).
     @discardableResult
     func removeStaleTemps(now: Date = Date()) -> Int {
-        OutputFile.removeStaleTemps(in: environment.outputDirectory, now: now)
+        OutputFile.removeStaleTemps(in: outputDirectory, now: now)
     }
 
     // MARK: Scannen
@@ -202,7 +234,12 @@ final class ScannerController {
 
     func scanNow() {
         guard canScan, let transport else { return }
-        let profile = self.profile, namer = self.namer, dir = environment.outputDirectory
+        guard outputDirectoryExists else {
+            environment.notifier.post(ResultMessage(
+                title: "Scan nicht gestartet", body: "Ablage nicht gefunden: \(outputDirectory.path)", files: []))
+            return
+        }
+        let profile = self.profile, namer = self.namer, dir = outputDirectory
         let runJob = environment.runJob
         state = .scanning(page: 0)
         scanTask = Task {

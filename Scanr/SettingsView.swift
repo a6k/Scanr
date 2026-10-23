@@ -29,6 +29,7 @@ private struct GeneralSettings: View {
     @Bindable var controller: ScannerController
     let loginItem: LoginItem
     let notifications: NotificationPermission
+    @State private var outputError: String?
 
     private static let placeholders: [(String, String)] = [
         ("{datum}", "Datum, etwa 2026-10-22"),
@@ -48,6 +49,27 @@ private struct GeneralSettings: View {
                 }
             }
             Section("Dateiname") {
+                LabeledContent("Ablage") {
+                    Menu {
+                        // Name wie im Finder, der auf diesem Mac „Desktop“ oder „Schreibtisch“ zeigen kann.
+                        Button(FileManager.default.displayName(atPath: controller.defaultOutputDirectory.path)) {
+                            choose(controller.defaultOutputDirectory)
+                        }
+                        Divider()
+                        Button("Anderer Ordner …") { pickFolder() }
+                    } label: {
+                        Label {
+                            Text(FileManager.default.displayName(atPath: controller.outputDirectory.path))
+                        } icon: {
+                            Image(nsImage: Self.folderIcon(controller.outputDirectory))
+                        }
+                    }
+                    .fixedSize()
+                    .help(controller.outputDirectory.path)
+                }
+                if let outputError {
+                    Text(outputError).foregroundStyle(.red)
+                }
                 TextField("Muster", text: $controller.fileNamePattern)
                 LabeledContent("Nächster Name", value: controller.previewName())
                 ForEach(Self.placeholders, id: \.0) { token, meaning in
@@ -55,7 +77,7 @@ private struct GeneralSettings: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                Text("Fehlt {nr}, wird die Nummer angehängt. Ablage: Schreibtisch.")
+                Text("Fehlt {nr}, wird die Nummer angehängt.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -86,10 +108,38 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { loginItem.refresh() }
+        .onAppear { loginItem.refresh(); outputError = nil }
         .task { await notifications.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await notifications.refresh() }
+        }
+    }
+}
+
+extension GeneralSettings {
+    /// Prüft den Ordner gleich beim Wechsel; macOS fragt dabei nach, wenn er geschützt ist.
+    private func choose(_ url: URL) {
+        outputError = controller.chooseOutputDirectory(url)
+    }
+
+    /// Ordnersymbol in Zeilengröße; `icon(forFile:)` liefert es sonst in voller Größe.
+    private static func folderIcon(_ url: URL) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: 16, height: 16)
+        return icon
+    }
+
+    private func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = controller.outputDirectory
+        panel.prompt = "Wählen"
+        panel.message = "Ordner für die Scans"
+        if panel.runModal() == .OK, let url = panel.url {
+            choose(url)
         }
     }
 }

@@ -104,6 +104,7 @@ final class FakeOpener: @unchecked Sendable {
 final class FakeJobs: @unchecked Sendable {
     private let lock = NSLock()
     private var started: [ScanProfile] = []
+    private var startedDirs: [URL] = []
     private var waiting: [CheckedContinuation<Void, Never>] = []
     private var released = false
     var hold = false
@@ -114,6 +115,7 @@ final class FakeJobs: @unchecked Sendable {
     var reportRecognizing = false
 
     var profiles: [ScanProfile] { lock.withLock { started } }
+    var dirs: [URL] { lock.withLock { startedDirs } }
 
     func release() {
         let conts = lock.withLock {
@@ -126,7 +128,7 @@ final class FakeJobs: @unchecked Sendable {
 
     func run(_ transport: any USBTransport, _ profile: ScanProfile, _ namer: FileNamer, _ dir: URL,
              _ progress: @escaping @Sendable (ScanProgress) -> Void) async -> ScanResult {
-        lock.withLock { started.append(profile) }
+        lock.withLock { started.append(profile); startedDirs.append(dir) }
         for n in stride(from: 1, through: pagesToReport, by: 1) { progress(.scanned(pages: n)) }
         if reportRecognizing { progress(.recognizing(page: 1, of: max(1, pagesToReport))) }
         if hold {

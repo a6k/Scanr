@@ -23,7 +23,7 @@ struct ScanrApp: App {
         notifier.activate()
         // Nicht auf dem Hauptthread: Fragt macOS erst nach dem Zugriff auf den Schreibtisch, hält
         // das Lesen bis zur Antwort an, und so lange erschiene kein Symbol in der Menüleiste.
-        let outputDirectory = environment.outputDirectory
+        let outputDirectory = controller.outputDirectory
         Task.detached(priority: .utility) { OutputFile.removeStaleTemps(in: outputDirectory) }
         let watcher = DeviceWatcher()
         self.watcher = watcher

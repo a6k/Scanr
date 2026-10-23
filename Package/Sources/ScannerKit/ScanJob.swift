@@ -179,8 +179,10 @@ public struct ScanJob: Sendable {
     /// Zuschnitt, Leerseitenprüfung und Farbmodus. Die Analyse läuft einmal, auf dem
     /// zugeschnittenen Blatt (`alreadyCropped`). Nil heißt Leerseite, die wegfällt.
     static func prepare(_ image: CGImage, profile: ScanProfile) -> ProcessedPage? {
-        let cropped = PageProcessor.cropAndDeskew(image)
+        var cropped = PageProcessor.cropAndDeskew(image)
         if profile.removeBlankPages && PageProcessor.isBlank(cropped, alreadyCropped: true) { return nil }
+        // Vor Farbe, 1 Bit und JPEG: ein verkehrt herum eingelegtes Blatt wird hier aufgerichtet.
+        cropped = ReadingDirection.upright(cropped)
         let dpi = profile.dpi
         switch profile.colorMode {
         case .color:

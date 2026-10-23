@@ -5,7 +5,7 @@ get a searchable PDF on your Desktop. Nothing else runs in the background.
 
 Scanr replaces ScanSnap Home for one job: scanning documents into files. It talks to the
 scanner directly, without the vendor driver, and it has no network code. Your scans go
-from the USB cable to your Desktop and nowhere else. There is no cloud, no account and
+from the USB cable to your Desktop, or a folder you choose, and nowhere else. There is no cloud, no account and
 no update service.
 
 ## What it does
@@ -22,6 +22,8 @@ no update service.
   - *Auto*: 300 dpi, colour only on pages that have colour, PDF.
   - *Foto*: 600 dpi colour, one JPG per page.
 - **File names** from a pattern, by default `2026-10-22 scan 01.pdf`.
+- **Output folder** is the Desktop unless you pick another one in the settings. macOS asks
+  for access when you change it, not at the first scan.
 - If a sheet double-feeds or jams, the pages read so far are saved and the message
   tells you which sheet to put back.
 

@@ -18,8 +18,46 @@ struct SettingsView: View {
             Tab("Profile", systemImage: "slider.horizontal.3") {
                 ProfileSettings(controller: controller)
             }
+            Tab("Info", systemImage: "info.circle") {
+                InfoSettings()
+            }
         }
         .frame(width: 480, height: 560)
+    }
+}
+
+// MARK: Info
+
+/// Über Scanr und Hilfe in einem Reiter. Scanr hat als Menüleisten-App kein Programmmenü,
+/// in dem „Über Scanr“ sonst stünde.
+private struct InfoSettings: View {
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .frame(width: 64, height: 64)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Scanr").font(.title2.bold())
+                        Text(AppLinks.versionLine).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Menüleisten-App für den Fujitsu ScanSnap iX500 per USB, ohne ScanSnap Home.")
+                Text(AppLinks.copyright)
+                Text("Das USB-Protokoll ist aus dem fujitsu-Backend von SANE portiert.")
+                Text("Scanr gehört nicht zu Fujitsu, PFU oder Ricoh. ScanSnap ist deren Marke.")
+            }
+            .font(.callout)
+            Section("Hilfe") {
+                Link("Hilfe", destination: AppLinks.help)
+                Link("Datenschutz", destination: AppLinks.privacy)
+                Link("Quelltext auf GitHub", destination: AppLinks.sourceCode)
+                Link(AppLinks.supportAddress, destination: AppLinks.support)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
@@ -96,15 +134,6 @@ private struct GeneralSettings: View {
                 if notifications.isDenied {
                     Button("Systemeinstellungen öffnen") { notifications.openSystemSettings() }
                 }
-            }
-            Section("Hilfe & Info") {
-                Link("Hilfe", destination: AppLinks.help)
-                Link("Datenschutz", destination: AppLinks.privacy)
-                Link("Quelltext auf GitHub", destination: AppLinks.sourceCode)
-                Link(AppLinks.supportAddress, destination: AppLinks.support)
-                Text(AppLinks.versionLine)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

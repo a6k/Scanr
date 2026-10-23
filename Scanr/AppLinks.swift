@@ -8,11 +8,16 @@ enum AppLinks {
     static let supportAddress = "support@comodin.com"
     static let support = URL(string: "mailto:\(supportAddress)")!
 
-    /// „Scanr 0.2 (2)“ aus der Info.plist, damit die Versionsnummer nur dort steht.
+    /// „Version 0.4 (4)“ aus der Info.plist, damit die Versionsnummer nur dort steht.
     static var versionLine: String {
         let info = Bundle.main.infoDictionary ?? [:]
         let version = info["CFBundleShortVersionString"] as? String ?? "?"
         let build = info["CFBundleVersion"] as? String ?? "?"
-        return "Scanr \(version) (\(build))"
+        return "Version \(version) (\(build))"
+    }
+
+    /// Copyright und Lizenz aus der Info.plist (`NSHumanReadableCopyright`).
+    static var copyright: String {
+        Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String ?? ""
     }
 }

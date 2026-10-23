@@ -225,6 +225,17 @@ final class PageProcessorTests: XCTestCase {
         }
     }
 
+    func testLongReceiptAtThirtyDegreesKeepsItsWidth() {
+        // Langer Beleg: Mit dem alten Akkumulator fielen bei steilem Winkel Kantenpunkte heraus.
+        for angle in [28.0, -28.0] {
+            let scan = Self.makeScan(
+                paperMM: (80, 500), angle: angle, blocks: Self.textLines(count: 80, width: 56))
+            let out = PageProcessor.cropAndDeskew(scan)
+            XCTAssertEqual(Double(out.width), 80 / 25.4 * 100, accuracy: 8, "Winkel \(angle)")
+            XCTAssertEqual(Double(out.height), 500 / 25.4 * 100, accuracy: 20, "Winkel \(angle)")
+        }
+    }
+
     func testStronglySkewedBlankReceiptIsBlank() {
         // Die leere Rückseite desselben Bons: ohne Zuschnitt zählte der Kantenschatten als Tinte.
         let scan = Self.makeScan(paperMM: (80, 176), angle: 20, shadow: true)

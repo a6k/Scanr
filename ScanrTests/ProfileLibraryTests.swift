@@ -59,6 +59,29 @@ struct ProfileLibraryTests {
         #expect(again.profile.dpi == 300)
     }
 
+    @Test func emptyNameKeepsTheOldName() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        for empty in ["", "   "] {
+            var auto = c.profiles.first { $0.id == "auto" }!
+            auto.name = empty
+            c.update(auto)
+            #expect(c.profiles.first { $0.id == "auto" }?.name == "Auto")
+        }
+    }
+
+    @Test func spaceWhileTypingStaysAndLongNamesAreCut() {
+        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
+        let c = rig.controller()
+        var auto = c.profiles.first { $0.id == "auto" }!
+        auto.name = "Belege "
+        c.update(auto)
+        #expect(c.profiles.first { $0.id == "auto" }?.name == "Belege ")
+        auto.name = String(repeating: "ä", count: 300)
+        c.update(auto)
+        #expect(c.profiles.first { $0.id == "auto" }?.name.count == ScannerController.maxProfileNameLength)
+    }
+
     @Test func restoreStartValues() {
         let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
         let c = rig.controller()

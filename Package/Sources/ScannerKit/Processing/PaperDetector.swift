@@ -72,7 +72,9 @@ enum PaperDetector {
 
         let span = w + h
         let size = 2 * span + 16
-        let offset = 0.3 * Double(span) + 2
+        // |x cos θ + y sin θ| bleibt unter w + h; so passt jeder Winkel des Suchbereichs hinein.
+        // Mit 0,3 fielen bei ±30 Grad und langen Belegen Kantenpunkte aus dem Akkumulator.
+        let offset = Double(span) + 2
 
         func votes(_ pts: Points, theta: Double) -> Votes {
             var acc = [Int32](repeating: 0, count: size)

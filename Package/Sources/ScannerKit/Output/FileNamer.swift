@@ -95,12 +95,13 @@ public struct FileNamer: Sendable {
         regex += "\\.[^./]+$"
 
         var highest = 0
-        if let re = try? NSRegularExpression(pattern: regex, options: .caseInsensitive),
+        if let re = try? NSRegularExpression(pattern: regex.precomposedStringWithCanonicalMapping, options: .caseInsensitive),
            let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
         {
             for listed in names {
                 // Ein ausgelagerter Platzhalter steht für die Datei, die iCloud weggeräumt hat.
-                let name = Self.placeholderTarget(listed) ?? listed
+                // Netzlaufwerke liefern Umlaute oft zerlegt (NFD); verglichen wird zusammengesetzt.
+                let name = (Self.placeholderTarget(listed) ?? listed).precomposedStringWithCanonicalMapping
                 let range = NSRange(name.startIndex..., in: name)
                 guard let m = re.firstMatch(in: name, range: range), m.numberOfRanges > 1,
                       let r = Range(m.range(at: 1), in: name), let n = Int(name[r])

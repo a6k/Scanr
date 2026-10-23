@@ -166,10 +166,13 @@ struct Rig {
     let failureLog = Locked<[String]>([])
     var outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
 
+    let cleanup: PreferencesCleanup
+
     init(opener: (FakeClock) -> FakeOpener) {
-        let suite = "ScanrTests.\(UUID().uuidString)"
+        let suite = PreferencesCleanup.temporarySuite()
         defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
+        cleanup = PreferencesCleanup(suite: suite)
         self.opener = opener(clock)
     }
 
@@ -205,4 +208,19 @@ final class Locked<T>: @unchecked Sendable {
     init(_ value: T) { stored = value }
     var value: T { lock.withLock { stored } }
     func withLock<R>(_ body: (inout T) -> R) -> R { lock.withLock { body(&stored) } }
+}
+
+/// Einstellungen eines Tests liegen als absoluter Pfad im Temp-Ordner, nicht unter
+/// `~/Library/Preferences`. Mit einem Suite-Namen blieb dort je Test eine Datei liegen, auch nach
+/// `removePersistentDomain` (cfprefsd schreibt eine leere nach; 2026-10-23: über 300 Stück).
+final class PreferencesCleanup: Sendable {
+    let suite: String
+    init(suite: String) { self.suite = suite }
+    deinit { try? FileManager.default.removeItem(atPath: suite + ".plist") }
+
+    static func temporarySuite() -> String {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("scanr-tests-prefs")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(UUID().uuidString).path
+    }
 }

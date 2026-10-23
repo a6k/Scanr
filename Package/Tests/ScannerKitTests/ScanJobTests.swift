@@ -129,6 +129,18 @@ final class ScanJobTests: XCTestCase {
         XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 1)
     }
 
+    func testFailedTextRecognitionKeepsThePagesWithoutTextLayer() async throws {
+        struct VisionFailed: Error {}
+        let f = fake([sheet(front: text(["Rechnung 4711"]), back: text(["Rueckseite 12"]))])
+        var j = job(f, profile(.auto))
+        j.recognize = { _ in throw VisionFailed() }
+        let result = await j.run { _ in }
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.pages, 2)
+        XCTAssertEqual(names(), ["scan 01.pdf"])
+        XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 2)
+    }
+
     func testWriteFailureIsNotHiddenByEarlierScannerError() async {
         let f = fake([sheet(front: text(["Blatt eins"]), back: blank), sheet(front: text(["Blatt zwei"]), back: blank)])
         f.objectPositionError = [2: .doubleFeed]

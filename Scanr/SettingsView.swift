@@ -150,7 +150,9 @@ final class LoginItem {
     private(set) var status: SMAppService.Status = SMAppService.mainApp.status
     private(set) var errorText: String?
 
-    var isEnabled: Bool { status == .enabled }
+    /// Auch beim Warten auf die Freigabe an: registriert ist die App dann schon, und Ausschalten
+    /// muss ohne vorheriges Einschalten gehen.
+    var isEnabled: Bool { status == .enabled || status == .requiresApproval }
 
     var statusText: String {
         switch status {
@@ -235,7 +237,9 @@ private struct ProfileSettings: View {
                         set: { shownID = $0 }
                     )) {
                         ForEach(controller.profiles) { profile in
-                            Text(profile.id == controller.activeProfileID ? "\(profile.name) •" : profile.name)
+                            let active = profile.id == controller.activeProfileID
+                            Text(active ? "\(profile.name) •" : profile.name)
+                                .accessibilityLabel(active ? "\(profile.name), aktiv" : profile.name)
                                 .tag(profile.id)
                         }
                     }
@@ -245,12 +249,14 @@ private struct ProfileSettings: View {
                         Image(systemName: "plus")
                     }
                     .help("Kopie dieses Profils anlegen")
+                    .accessibilityLabel("Profil kopieren")
                     Button {
                         confirmDelete = true
                     } label: {
                         Image(systemName: "minus")
                     }
                     .help("Dieses Profil löschen")
+                    .accessibilityLabel("Profil löschen")
                     .disabled(!controller.canDelete(selectedID))
                 }
             } footer: {

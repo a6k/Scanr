@@ -166,8 +166,19 @@ final class ScannerController {
     }
 
     /// Ersetzt das Profil mit derselben id und speichert.
+    /// Längster Profilname. Der Name kann über {profil} in den Dateinamen gehen, und macOS
+    /// erlaubt dort höchstens 255 Byte.
+    static let maxProfileNameLength = 40
+
     func update(_ profile: ScanProfile) {
         guard let i = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
+        var profile = profile
+        // Ein leerer Name machte das Profil in Menü und Auswahl unsichtbar; dann bleibt der alte.
+        // Getrimmt wird nur für die Prüfung, sonst ließe sich beim Tippen kein Leerzeichen setzen.
+        if profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            profile.name = profiles[i].name
+        }
+        profile.name = String(profile.name.prefix(Self.maxProfileNameLength))
         profiles[i] = profile
         store.save(profiles)
     }

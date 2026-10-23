@@ -63,6 +63,8 @@ public struct ScanJob: Sendable {
     let outputDir: URL
     /// Tests: läuft zwischen Namensfrage und Schreiben, dort kann jemand die Datei anlegen.
     var beforeWrite: (@Sendable (URL) -> Void)?
+    /// Texterkennung einer Seite; Tests setzen hier einen Fehler ein.
+    var recognize: @Sendable (CGImage) async throws -> [TextLine] = { try await OCR.lines(in: $0) }
 
     public init(transport: USBTransport, profile: ScanProfile, namer: FileNamer, outputDir: URL) {
         self.init(session: ScanSession(transport: transport), profile: profile, namer: namer, outputDir: outputDir)
@@ -203,7 +205,15 @@ public struct ScanJob: Sendable {
         for (i, page) in pages.enumerated() {
             var lines: [TextLine] = []
             if !Task.isCancelled { progress(.recognizing(page: i + 1, of: pages.count)) }
-            if !Task.isCancelled { lines = try await OCR.lines(in: page.image) }
+            if !Task.isCancelled {
+                // Scheitert die Erkennung einer Seite, kommt sie ohne Textebene ins PDF. Sonst
+                // wäre der ganze gescannte Stapel verloren, und die Meldung nennte einen Schreibfehler.
+                do {
+                    lines = try await recognize(page.image)
+                } catch {
+                    OutputFile.log.error("Texterkennung Seite \(i + 1): \(String(describing: error), privacy: .public)")
+                }
+            }
             withText.append((page, lines))
         }
         return try write(ext: "pdf") { url in

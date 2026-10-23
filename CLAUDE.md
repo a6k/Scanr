@@ -12,6 +12,16 @@ Persönliche macOS-Menüleisten-App, die einen Fujitsu ScanSnap iX500 direkt üb
 
 Liegt das Repo in iCloud (`~/Documents`), scheitert das Signieren des Test-Bundles an Finder-Attributen. Dann einen Build-Ordner außerhalb nutzen: `--scratch-path /tmp/scanr-build`.
 
+Zwei Testsuiten, zwei Befehle. Das Scheme `Scanr` (⌘U, Xcode-MCP `RunAllTests`) fährt nur die
+App-Tests `ScanrTests`. Treiber, Bildverarbeitung, OCR und PDF (`ScannerKitTests`, rund 160
+Tests) laufen nur mit `swift test`. Ein grünes ⌘U allein sagt über das Paket nichts. Das
+Paket-Testziel ins Scheme einzutragen hat `xcodebuild` am 2026-10-23 nicht angenommen.
+
+```
+swift test --package-path Package --scratch-path /tmp/scanr-build
+xcodebuild test -project Scanr.xcodeproj -scheme Scanr -destination 'platform=macOS'
+```
+
 ## Regeln
 
 - Kommentare und Texte für Nutzer auf Deutsch, kein Gedankenstrich als Satzzeichen.

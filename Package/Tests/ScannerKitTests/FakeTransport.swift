@@ -47,6 +47,10 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
     var zeroPixelSize = false
     /// Kurze READs kommen ohne ILI und EOM (fehlerhaftes Gerät).
     var unflaggedShortReads = false
+    /// Der Rest kommt ohne Kennzeichen, das Seitenende danach als leerer READ mit EOM, aber ohne ILI.
+    var emptyEomWithoutIli = false
+    /// Zählt leere EOM-READs; ab 50 bricht der Fake ab, damit ein Fehler im Lesen nicht hängt.
+    private var emptyEomReads = 0
     /// SCANNER CONTROL 04 (Abbruch) braucht so lange, auch in einem abgebrochenen Task.
     var cancelDelay: Duration?
     private var fedSheets = 0
@@ -111,6 +115,12 @@ final class FakeTransport: USBTransport, @unchecked Sendable {
                 return CommandResult(data: Array(left.prefix(want)))
             }
             remaining[side] = []
+            if emptyEomWithoutIli {
+                if !left.isEmpty { return CommandResult(data: left) }
+                emptyEomReads += 1
+                if emptyEomReads > 50 { throw ScannerError.protocolViolation("Fake: Seite endet nie") }
+                return CommandResult(data: [], endOfMedium: true)
+            }
             if unflaggedShortReads { return CommandResult(data: left) }
             return CommandResult(data: left, shortRead: true, endOfMedium: true)
         default:

@@ -3,7 +3,7 @@
 # Hält Commits auf, die eine Apple-Team-ID enthalten.
 #
 # Xcode schreibt DEVELOPMENT_TEAM beim Signieren mitunter in die project.pbxproj zurück,
-# etwa nach einer Änderung im Team-Auswahlfeld. Das Repo ist öffentlich, die ID gehört
+# etwa nach einer Änderung im Team-Auswahlfeld, dazu DevelopmentTeam in die TargetAttributes. Das Repo ist öffentlich, die ID gehört
 # nach Local.xcconfig, das nicht im Repo liegt.
 #
 # Geprüft werden nur die gestagten Änderungen, also genau das, was in den Commit ginge.
@@ -13,7 +13,7 @@
 set -eu
 
 found=$(git diff --cached -U0 --diff-filter=ACM \
-        | grep -nE '^\+.*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*"?[A-Z0-9]{10}"?' || true)
+        | grep -nE '^\+.*(DEVELOPMENT_TEAM|DevelopmentTeam)[[:space:]]*=[[:space:]]*"?[A-Z0-9]{10}"?' || true)
 
 if [ -n "$found" ]; then
     cat >&2 <<'MESSAGE'

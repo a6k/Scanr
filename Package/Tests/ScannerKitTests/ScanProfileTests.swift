@@ -6,12 +6,24 @@ final class ScanProfileTests: XCTestCase {
     var defaults: UserDefaults!
 
     override func setUp() {
-        suite = "scanr-test-\(UUID().uuidString)"
+        suite = Self.temporarySuite()
         defaults = UserDefaults(suiteName: suite)!
     }
 
     override func tearDown() {
-        defaults.removePersistentDomain(forName: suite)
+        Self.removeSuite(suite)
+    }
+
+    /// Einstellungen als absoluter Pfad im Temp-Ordner. Mit einem Suite-Namen bliebe je Test eine
+    /// Datei in `~/Library/Preferences`, auch nach `removePersistentDomain`.
+    static func temporarySuite() -> String {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("scanr-tests-prefs")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(UUID().uuidString).path
+    }
+
+    static func removeSuite(_ suite: String) {
+        try? FileManager.default.removeItem(atPath: suite + ".plist")
     }
 
     func testStartValues() {
@@ -121,7 +133,9 @@ final class ScanProfileTests: XCTestCase {
     }
 
     func testActiveProfileDefaultsToRechnungenAndPersists() {
-        let defaults = UserDefaults(suiteName: "scanr-active-\(UUID().uuidString)")!
+        let suite = Self.temporarySuite()
+        defer { Self.removeSuite(suite) }
+        let defaults = UserDefaults(suiteName: suite)!
         let store = ProfileStore(defaults: defaults)
         XCTAssertEqual(store.activeProfileID, ScanProfile.rechnungen.id)
         store.activeProfileID = "foto"

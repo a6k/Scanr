@@ -224,6 +224,16 @@ final class ScanSessionTests: XCTestCase {
         XCTAssertEqual(fake.calls.map(FakeTransport.label).last, "SCANNER CONTROL 04")
     }
 
+    func testEmptyReadWithEomButWithoutIliEndsThePage() async {
+        let fake = FakeTransport()
+        fake.sheets = [sheet(width: 4, frontLines: 6, backLines: 4)]
+        fake.emptyEomWithoutIli = true
+        let (pages, error) = await collect(ScanSession(transport: fake, capabilities: caps, emptyReadPause: .zero),
+                                           ScanSettings(dpi: 300, duplex: false))
+        XCTAssertNil(error)
+        XCTAssertEqual(pages.map { $0.image.height }, [6])
+    }
+
     func testRemainderBelowOneLineEndsWithError() async {
         let fake = FakeTransport()
         // 5 Zeilen Fenster, das Gerät schickt 4,5 Zeilen ohne ILI und EOM: Rest unter einer Zeile.

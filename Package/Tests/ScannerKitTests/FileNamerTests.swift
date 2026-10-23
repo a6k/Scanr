@@ -115,6 +115,15 @@ final class FileNamerTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "A.(1) 05.pdf")
     }
 
+    func testDecomposedUmlautsInFolderStillCount() throws {
+        // Ein Netzlaufwerk liefert „ü“ als u plus Trema (NFD), der Profilname ist zusammengesetzt.
+        var p = ScanProfile.auto
+        p.name = "B\u{00FC}ro"
+        try touch("Bu\u{0308}ro 03.pdf")
+        let url = namer("{profil} {nr}").nextURL(in: dir, date: date(2026, 10, 22), profile: p, ext: "pdf")
+        XCTAssertEqual(url.lastPathComponent, "B\u{00FC}ro 04.pdf")
+    }
+
     func testPatternWithoutNumberGetsOneAppended() throws {
         let url = namer("{datum} Scan").nextURL(in: dir, date: date(2026, 10, 22), profile: .auto, ext: "pdf")
         XCTAssertEqual(url.lastPathComponent, "2026-10-22 Scan 01.pdf")
@@ -126,8 +135,10 @@ final class FileNamerTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "2026-10-22 scan 06.pdf")
     }
 
-    func testNameIsGregorianRegardlessOfSystemCalendar() {
-        // Ein buddhistischer Kalender würde das Jahr 2569 liefern; der Namer nutzt immer gregorianisch.
+    func testDateInForeignTimeZoneHasGregorianYear() {
+        // Prüft die Zeitzone. Ob der Namer auch bei buddhistischem Systemkalender gregorianisch
+        // bleibt (sonst Jahr 2569), lässt sich hier nicht nachstellen: der Systemkalender ist
+        // nicht umschaltbar. Die Zusage steht in `FileNamer.calendar`.
         let url = FileNamer(timeZone: TimeZone(identifier: "Asia/Bangkok")!)
             .nextURL(in: dir, date: Date(timeIntervalSince1970: 1_792_000_000), profile: .auto, ext: "pdf")
         XCTAssertTrue(url.lastPathComponent.hasPrefix("2026-"), url.lastPathComponent)

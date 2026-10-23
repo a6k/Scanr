@@ -294,7 +294,7 @@ struct ScannerControllerTests {
         #expect(rig.opener.calls == 2)
     }
 
-    @Test func startRemovesStaleTempFilesFromTheOutputFolder() throws {
+    @Test func removeStaleTempsCleansTheOutputFolder() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("scanr-app-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }

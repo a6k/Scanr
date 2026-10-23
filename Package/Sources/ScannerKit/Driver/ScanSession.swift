@@ -380,6 +380,8 @@ struct SheetReader {
         if self[side].bytes >= totalBytes { self[side].eof = true }
         self[side].shortRead = r.shortRead
         if r.endOfMedium { endOfMedium = true }
+        // Ein leerer READ mit EOM beendet die Seite auch ohne ILI, sonst läse die Schleife ohne Pause weiter.
+        if r.endOfMedium && r.data.isEmpty { self[side].eof = true }
         if endOfMedium {
             if front.shortRead { front.eof = true }
             if back.shortRead { back.eof = true }

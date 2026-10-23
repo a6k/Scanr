@@ -26,6 +26,7 @@ struct MenuView: View {
                 .disabled(!controller.canScan)
         }
         Divider()
+        Button("Hilfe") { NSWorkspace.shared.open(AppLinks.help) }
         Button("Einstellungen …") {
             NSApplication.shared.activate()
             openSettings()

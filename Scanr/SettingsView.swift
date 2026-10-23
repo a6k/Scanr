@@ -75,6 +75,15 @@ private struct GeneralSettings: View {
                     Button("Systemeinstellungen öffnen") { notifications.openSystemSettings() }
                 }
             }
+            Section("Hilfe & Info") {
+                Link("Hilfe", destination: AppLinks.help)
+                Link("Datenschutz", destination: AppLinks.privacy)
+                Link("Quelltext auf GitHub", destination: AppLinks.sourceCode)
+                Link(AppLinks.supportAddress, destination: AppLinks.support)
+                Text(AppLinks.versionLine)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear { loginItem.refresh() }

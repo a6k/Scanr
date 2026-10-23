@@ -34,15 +34,18 @@ public struct ScanResult: Sendable {
     /// Der Durchlauf wurde abgebrochen. Was bis dahin gescannt war, steht in `files`: bei JPG die
     /// fertigen Dateien, bei PDF eine Datei mit allen behaltenen Seiten.
     public let cancelled: Bool
+    /// Seiten im PDF, deren Texterkennung gescheitert ist. Sie stehen ohne Textebene darin.
+    public let pagesWithoutText: Int
 
     public init(files: [URL], pages: Int, sheets: Int = 0, error: ScanJobError?,
-                scannerError: ScannerError? = nil, cancelled: Bool = false) {
+                scannerError: ScannerError? = nil, cancelled: Bool = false, pagesWithoutText: Int = 0) {
         self.files = files
         self.pages = pages
         self.sheets = sheets
         self.error = error
         self.scannerError = scannerError
         self.cancelled = cancelled
+        self.pagesWithoutText = pagesWithoutText
     }
 }
 
@@ -88,6 +91,7 @@ public struct ScanJob: Sendable {
         var files: [URL] = []            // nur JPG
         var pageCount = 0
         var sheets = 0
+        var pagesWithoutText = 0
         var scanFailure: ScannerError?
         var outputFailure: OutputError?
         let duplex = profile.scanSettings.duplex
@@ -127,7 +131,9 @@ public struct ScanJob: Sendable {
 
         if profile.format == .pdf && !kept.isEmpty && outputFailure == nil {
             do {
-                files = [try await writePDF(kept, progress: progress)]
+                let pdf = try await writePDF(kept, progress: progress)
+                files = [pdf.url]
+                pagesWithoutText = pdf.withoutText
             } catch {
                 if let e = error as? OutputError {
                     outputFailure = e
@@ -141,7 +147,8 @@ public struct ScanJob: Sendable {
         }
         if Task.isCancelled {
             return ScanResult(files: files, pages: pageCount, sheets: sheets,
-                              error: outputFailure.map { .output($0) }, cancelled: true)
+                              error: outputFailure.map { .output($0) }, cancelled: true,
+                              pagesWithoutText: pagesWithoutText)
         }
         // Ein Schreibfehler gewinnt, wenn nichts geschrieben wurde; der Scannerfehler bleibt in
         // `scannerError`. Mit geschriebener Datei zählt der Fehler, der den Stapel beendet hat.
@@ -152,7 +159,8 @@ public struct ScanJob: Sendable {
         } else {
             nil
         }
-        return ScanResult(files: files, pages: pageCount, sheets: sheets, error: error, scannerError: scanFailure)
+        return ScanResult(files: files, pages: pageCount, sheets: sheets, error: error, scannerError: scanFailure,
+                          pagesWithoutText: pagesWithoutText)
     }
 
     /// Farb- und Graubilder sofort als JPEG kodieren (Qualität des Profils), damit sie bis zum
@@ -200,8 +208,11 @@ public struct ScanJob: Sendable {
     /// Texterkennung nacheinander, vor der Namensfrage: so liegt zwischen Frage und Schreiben
     /// keine Wartezeit. Nach einem Abbruch beginnt keine weitere Erkennung, die übrigen Seiten
     /// kommen ohne Textebene ins PDF.
-    private func writePDF(_ pages: [ProcessedPage], progress: @Sendable (ScanProgress) -> Void) async throws -> URL {
+    private func writePDF(_ pages: [ProcessedPage], progress: @Sendable (ScanProgress) -> Void) async throws
+        -> (url: URL, withoutText: Int)
+    {
         var withText: [(ProcessedPage, [TextLine])] = []
+        var withoutText = 0
         for (i, page) in pages.enumerated() {
             var lines: [TextLine] = []
             if !Task.isCancelled { progress(.recognizing(page: i + 1, of: pages.count)) }
@@ -211,14 +222,16 @@ public struct ScanJob: Sendable {
                 do {
                     lines = try await recognize(page.image)
                 } catch {
+                    withoutText += 1
                     OutputFile.log.error("Texterkennung Seite \(i + 1): \(String(describing: error), privacy: .public)")
                 }
             }
             withText.append((page, lines))
         }
-        return try write(ext: "pdf") { url in
+        let url = try write(ext: "pdf") { url in
             try PDFComposer.write(withText, to: url, jpegQuality: profile.jpegQuality)
         }
+        return (url, withoutText)
     }
 
     /// Fragt den Namen unmittelbar vor dem Schreiben. Hat sich die Datei inzwischen angefunden,

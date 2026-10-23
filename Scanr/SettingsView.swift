@@ -271,6 +271,9 @@ private struct ProfileSettings: View {
                 )) {
                     controller.restoreStartValues(of: profile.id)
                 }
+                // Je Profil eine eigene Sektion: beim Wechsel übernimmt die alte ihren Namen
+                // noch ins alte Profil, bevor die neue erscheint.
+                .id(profile.id)
             }
         }
         .formStyle(.grouped)
@@ -291,10 +294,25 @@ private struct ProfileSettings: View {
 private struct ProfileSection: View {
     @Binding var profile: ScanProfile
     let restore: () -> Void
+    /// Der Name wird hier bearbeitet und erst beim Verlassen des Felds übernommen (Eingabetaste,
+    /// anderes Feld, anderes Profil, Fenster zu). Leer bleibt der bisherige Name.
+    @State private var nameDraft = ""
+    @FocusState private var nameFocused: Bool
+
+    private func commitName() {
+        let name = ProfileLibrary.committedName(nameDraft, previous: profile.name)
+        if name != profile.name { profile.name = name }
+        nameDraft = name
+    }
 
     var body: some View {
         Section {
-            TextField("Name", text: $profile.name)
+            TextField("Name", text: $nameDraft)
+                .focused($nameFocused)
+                .onSubmit(commitName)
+                .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
+                .onAppear { nameDraft = profile.name }
+                .onDisappear(perform: commitName)
             Picker("Auflösung", selection: $profile.dpi) {
                 ForEach(ScanProfile.allowedDPI, id: \.self) { Text("\($0) dpi").tag($0) }
             }

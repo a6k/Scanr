@@ -60,26 +60,14 @@ struct ProfileLibraryTests {
     }
 
     @Test func emptyNameKeepsTheOldName() {
-        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
-        let c = rig.controller()
-        for empty in ["", "   "] {
-            var auto = c.profiles.first { $0.id == "auto" }!
-            auto.name = empty
-            c.update(auto)
-            #expect(c.profiles.first { $0.id == "auto" }?.name == "Auto")
-        }
+        #expect(ProfileLibrary.committedName("", previous: "Auto") == "Auto")
+        #expect(ProfileLibrary.committedName("   ", previous: "Auto") == "Auto")
     }
 
-    @Test func spaceWhileTypingStaysAndLongNamesAreCut() {
-        let rig = Rig { _ in FakeOpener([.failure(.notFound)]) }
-        let c = rig.controller()
-        var auto = c.profiles.first { $0.id == "auto" }!
-        auto.name = "Belege "
-        c.update(auto)
-        #expect(c.profiles.first { $0.id == "auto" }?.name == "Belege ")
-        auto.name = String(repeating: "ä", count: 300)
-        c.update(auto)
-        #expect(c.profiles.first { $0.id == "auto" }?.name.count == ScannerController.maxProfileNameLength)
+    @Test func committedNameKeepsSpacesAndCutsLongNames() {
+        #expect(ProfileLibrary.committedName("Belege Firma", previous: "Auto") == "Belege Firma")
+        let long = ProfileLibrary.committedName(String(repeating: "ä", count: 300), previous: "Auto")
+        #expect(long.count == ProfileLibrary.maxNameLength)
     }
 
     @Test func restoreStartValues() {

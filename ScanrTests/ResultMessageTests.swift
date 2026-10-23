@@ -18,6 +18,13 @@ struct ResultMessageTests {
         #expect(m.files == [a, b])
     }
 
+    @Test func successNamesPagesWithoutText() {
+        let pdf = URL(fileURLWithPath: "/tmp/2026-10-22 scan 01.pdf")
+        let m = ResultMessage(ScanResult(files: [pdf], pages: 3, error: nil, pagesWithoutText: 2))
+        #expect(m.title == "Scan gespeichert")
+        #expect(m.body == "2026-10-22 scan 01.pdf. Ohne Texterkennung: 2 Seiten")
+    }
+
     @Test func onlyBlankPages() {
         let m = ResultMessage(ScanResult(files: [], pages: 0, error: nil))
         #expect(m.title == "Nichts gespeichert")

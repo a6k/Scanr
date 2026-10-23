@@ -62,6 +62,29 @@ struct OutputFolderTests {
             title: "Scan nicht gestartet", body: "Ablage nicht gefunden: \(dir.path)", files: [])])
     }
 
+    @Test func unwritableFolderStopsTheScanBeforeFeeding() async throws {
+        let dir = try Self.makeFolder()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let rig = Rig { clock in FakeOpener([.success(FakeTransport([.status(button: false)], clock: clock))]) }
+        let c = rig.controller()
+        #expect(c.chooseOutputDirectory(dir) == nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        _ = await c.step()
+
+        c.scanNow()
+        await c.scanTask?.value
+
+        #expect(rig.jobs.profiles.isEmpty)
+        let expected = ResultMessage(title: "Scan nicht gestartet",
+                                     body: "In „\(dir.lastPathComponent)“ kann Scanr nicht schreiben.", files: [])
+        #expect(rig.notifier.posted == [expected])
+        // Ohne erlaubte Mitteilungen steht das Ergebnis im Menü.
+        #expect(c.lastMessage == expected)
+    }
+
     @Test func scanGoesToTheChosenFolder() async throws {
         let dir = try Self.makeFolder()
         defer { try? FileManager.default.removeItem(at: dir) }

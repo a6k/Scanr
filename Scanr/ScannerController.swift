@@ -102,6 +102,8 @@ final class ScannerController {
     }
     /// Ablage der Scans. Ohne eigene Wahl der Ordner aus der Umgebung (Schreibtisch).
     private(set) var outputDirectory: URL
+    /// Die zuletzt gemeldete Mitteilung, das Menü zeigt sie unter dem Status.
+    private(set) var lastMessage: ResultMessage?
 
     @ObservationIgnored private let environment: ScannerEnvironment
     @ObservationIgnored private let store: ProfileStore
@@ -135,14 +137,23 @@ final class ScannerController {
     /// trägt das Muster der Temp-Dateien, ein Rest würde also beim Start aufgeräumt.
     func chooseOutputDirectory(_ url: URL) -> String? {
         let dir = url.standardizedFileURL
-        let probe = dir.appendingPathComponent(".scanr-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).tmp")
-        guard FileManager.default.createFile(atPath: probe.path, contents: Data()) else {
-            return "In „\(dir.lastPathComponent)“ kann Scanr nicht schreiben."
-        }
-        try? FileManager.default.removeItem(at: probe)
+        guard Self.canWrite(in: dir) else { return Self.notWritableText(dir) }
         outputDirectory = dir
         environment.defaults.set(dir.path, forKey: Self.outputDirectoryKey)
         return nil
+    }
+
+    /// Legt eine Probedatei an und löscht sie wieder. Sie trägt das Muster der Temp-Dateien,
+    /// ein Rest würde also beim Start aufgeräumt.
+    static func canWrite(in dir: URL) -> Bool {
+        let probe = dir.appendingPathComponent(".scanr-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(atPath: probe.path, contents: Data()) else { return false }
+        try? FileManager.default.removeItem(at: probe)
+        return true
+    }
+
+    static func notWritableText(_ dir: URL) -> String {
+        "In „\(dir.lastPathComponent)“ kann Scanr nicht schreiben."
     }
 
     /// Gibt es den Ablageordner noch? Ein gelöschter Ordner oder ein abgezogenes Laufwerk nicht.
@@ -166,19 +177,8 @@ final class ScannerController {
     }
 
     /// Ersetzt das Profil mit derselben id und speichert.
-    /// Längster Profilname. Der Name kann über {profil} in den Dateinamen gehen, und macOS
-    /// erlaubt dort höchstens 255 Byte.
-    static let maxProfileNameLength = 40
-
     func update(_ profile: ScanProfile) {
         guard let i = profiles.firstIndex(where: { $0.id == profile.id }) else { return }
-        var profile = profile
-        // Ein leerer Name machte das Profil in Menü und Auswahl unsichtbar; dann bleibt der alte.
-        // Getrimmt wird nur für die Prüfung, sonst ließe sich beim Tippen kein Leerzeichen setzen.
-        if profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            profile.name = profiles[i].name
-        }
-        profile.name = String(profile.name.prefix(Self.maxProfileNameLength))
         profiles[i] = profile
         store.save(profiles)
     }
@@ -246,8 +246,14 @@ final class ScannerController {
     func scanNow() {
         guard canScan, let transport else { return }
         guard outputDirectoryExists else {
-            environment.notifier.post(ResultMessage(
+            report(ResultMessage(
                 title: "Scan nicht gestartet", body: "Ablage nicht gefunden: \(outputDirectory.path)", files: []))
+            return
+        }
+        // Vor dem Einzug prüfen: sonst fiele ein nicht beschreibbarer Ordner (etwa „Nicht erlauben“
+        // bei der Rückfrage von macOS) erst nach Scan und Texterkennung des ganzen Stapels auf.
+        guard Self.canWrite(in: outputDirectory) else {
+            report(ResultMessage(title: "Scan nicht gestartet", body: Self.notWritableText(outputDirectory), files: []))
             return
         }
         let profile = self.profile, namer = self.namer, dir = outputDirectory
@@ -277,6 +283,13 @@ final class ScannerController {
         }
     }
 
+    /// Meldet das Ergebnis als Mitteilung und hält es fürs Menü fest. Ohne erlaubte Mitteilungen
+    /// sähe man sonst nirgends, ob ein Scan gespeichert wurde oder gescheitert ist.
+    private func report(_ message: ResultMessage) {
+        lastMessage = message
+        environment.notifier.post(message)
+    }
+
     private func finish(_ result: ScanResult) {
         if let error = result.error {
             Self.log.notice("Durchlauf beendet mit \(String(describing: error), privacy: .public)")
@@ -289,7 +302,7 @@ final class ScannerController {
             state = .ready
         }
         scanTask = nil
-        environment.notifier.post(ResultMessage(result))
+        report(ResultMessage(result))
     }
 
     // MARK: Abfrage
@@ -311,7 +324,7 @@ final class ScannerController {
             let pressed = status.scanButton && !buttonWasDown
             buttonWasDown = status.scanButton
             if pressed && status.coverOpen {
-                environment.notifier.post(ResultMessage(title: "Scan nicht gestartet", body: Self.coverOpenText, files: []))
+                report(ResultMessage(title: "Scan nicht gestartet", body: Self.coverOpenText, files: []))
             } else if pressed {
                 scanNow()
             }

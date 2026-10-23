@@ -23,6 +23,18 @@ nonisolated enum ProfileLibrary {
         return start == profile
     }
 
+    /// Längster Profilname. Der Name kann über {profil} in den Dateinamen gehen, und macOS
+    /// erlaubt dort höchstens 255 Byte.
+    static let maxNameLength = 40
+
+    /// Der Name, der beim Verlassen des Namensfelds gilt: leer bleibt der bisherige, sonst auf
+    /// `maxNameLength` gekürzt. Nicht bei jedem Tastendruck, sonst ließe sich ein Name nicht
+    /// ganz löschen und neu schreiben.
+    static func committedName(_ draft: String, previous: String) -> String {
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return previous }
+        return String(draft.prefix(maxNameLength))
+    }
+
     static func isStartProfile(_ id: String) -> Bool {
         startProfiles.contains { $0.id == id }
     }

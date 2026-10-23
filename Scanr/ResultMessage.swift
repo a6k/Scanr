@@ -34,6 +34,9 @@ nonisolated struct ResultMessage: Equatable, Sendable {
             title = "Scan gespeichert"
             let first = result.files[0].lastPathComponent
             body = result.files.count == 1 ? first : "\(Self.count(result.files.count, "Datei", "Dateien")), erste: \(first)"
+            if result.pagesWithoutText > 0 {
+                body += ". Ohne Texterkennung: \(Self.count(result.pagesWithoutText, "Seite", "Seiten"))"
+            }
         }
     }
 

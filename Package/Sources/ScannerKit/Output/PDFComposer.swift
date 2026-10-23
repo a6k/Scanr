@@ -17,13 +17,14 @@ public enum PDFComposer {
     }
 
     private static func render(_ pages: [(ProcessedPage, [TextLine])], to url: URL, jpegQuality: Double) throws {
-        // CoreGraphics nennt keinen Grund. Ob der Ordner beschreibbar ist, sagt das Protokoll.
-        guard let consumer = CGDataConsumer(url: url as CFURL),
+        // Erst in den Speicher, dann mit Data.write auf die Platte: CoreGraphics schreibt direkt
+        // in eine Datei, ohne einen Schreibfehler zu melden (volle Platte, Netzlaufwerk weg), und
+        // ein abgeschnittenes PDF käme als „Scan gespeichert“ an. Data.write wirft dann.
+        let buffer = NSMutableData()
+        guard let consumer = CGDataConsumer(data: buffer as CFMutableData),
               let ctx = CGContext(consumer: consumer, mediaBox: nil, nil)
         else {
-            let dir = url.deletingLastPathComponent().path
-            let writable = FileManager.default.isWritableFile(atPath: dir)
-            OutputFile.log.error("PDF nicht anlegbar, Ordner beschreibbar: \(writable, privacy: .public)")
+            OutputFile.log.error("PDF-Kontext nicht anlegbar")
             throw OutputError.cannotCreateFile
         }
 
@@ -39,6 +40,14 @@ public enum PDFComposer {
             ctx.endPDFPage()
         }
         ctx.closePDF()
+        do {
+            try (buffer as Data).write(to: url)
+        } catch {
+            let dir = url.deletingLastPathComponent().path
+            let writable = FileManager.default.isWritableFile(atPath: dir)
+            OutputFile.log.error("PDF nicht geschrieben (\(String(describing: error), privacy: .public)), Ordner beschreibbar: \(writable, privacy: .public)")
+            throw OutputError.cannotCreateFile
+        }
     }
 
     /// Farbseiten gehen als fertig kodierte JPEG-Daten in das PDF (CoreGraphics übernimmt sie

@@ -137,6 +137,7 @@ final class ScanJobTests: XCTestCase {
         let result = await j.run { _ in }
         XCTAssertNil(result.error)
         XCTAssertEqual(result.pages, 2)
+        XCTAssertEqual(result.pagesWithoutText, 2)
         XCTAssertEqual(names(), ["scan 01.pdf"])
         XCTAssertEqual(PDFDocument(url: result.files[0])?.pageCount, 2)
     }

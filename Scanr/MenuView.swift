@@ -8,6 +8,9 @@ struct MenuView: View {
 
     var body: some View {
         Text(controller.state.text)
+        if let last = controller.lastMessage {
+            Text("\(last.title): \(last.body)")
+        }
         Divider()
         Picker("Profil", selection: Binding(
             get: { controller.activeProfileID },

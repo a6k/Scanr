@@ -42,6 +42,8 @@ private struct InfoSettings: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Scanr").font(.title2.bold())
                         Text(AppLinks.versionLine).foregroundStyle(.secondary)
+                        Link("Nach Update suchen", destination: AppLinks.latestRelease)
+                            .help("Öffnet die neueste Version auf GitHub im Browser")
                     }
                 }
                 Text("Menüleisten-App für den Fujitsu ScanSnap iX500 per USB, ohne ScanSnap Home.")

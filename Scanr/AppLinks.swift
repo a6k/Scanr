@@ -5,6 +5,9 @@ enum AppLinks {
     static let help = URL(string: "https://comodin.com/projekte/scanr/hilfe/")!
     static let privacy = URL(string: "https://comodin.com/projekte/scanr/privacy")!
     static let sourceCode = URL(string: "https://github.com/a6k/Scanr")!
+    /// Neueste Version auf GitHub. Scanr fragt nicht selbst nach (kein Netzwerkcode), der
+    /// Knopf öffnet die Seite im Browser, die eigene Version steht im Reiter daneben.
+    static let latestRelease = URL(string: "https://github.com/a6k/Scanr/releases/latest")!
     static let supportAddress = "support@comodin.com"
     static let support = URL(string: "mailto:\(supportAddress)")!
 

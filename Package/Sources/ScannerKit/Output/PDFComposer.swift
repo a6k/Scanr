@@ -41,7 +41,7 @@ public enum PDFComposer {
         }
         ctx.closePDF()
         do {
-            try (buffer as Data).write(to: url)
+            try buffer.write(to: url, options: [])
         } catch {
             let dir = url.deletingLastPathComponent().path
             let writable = FileManager.default.isWritableFile(atPath: dir)

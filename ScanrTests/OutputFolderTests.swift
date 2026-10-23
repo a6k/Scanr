@@ -85,6 +85,26 @@ struct OutputFolderTests {
         #expect(c.lastMessage == expected)
     }
 
+    @Test func lastMessageIsClearedWhenAScanStarts() async throws {
+        let dir = try Self.makeFolder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rig = Rig { clock in FakeOpener([.success(FakeTransport([.status(button: false)], clock: clock))]) }
+        rig.jobs.hold = true
+        let c = rig.controller()
+        #expect(c.chooseOutputDirectory(dir) == nil)
+        try FileManager.default.removeItem(at: dir)
+        _ = await c.step()
+        c.scanNow()
+        #expect(c.lastMessage?.body.hasPrefix("Ablage nicht gefunden") == true)
+
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        c.scanNow()
+        #expect(c.isScanning)
+        #expect(c.lastMessage == nil)
+        rig.jobs.release()
+        await c.scanTask?.value
+    }
+
     @Test func scanGoesToTheChosenFolder() async throws {
         let dir = try Self.makeFolder()
         defer { try? FileManager.default.removeItem(at: dir) }

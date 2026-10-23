@@ -139,6 +139,7 @@ final class ScannerController {
         let dir = url.standardizedFileURL
         guard Self.canWrite(in: dir) else { return Self.notWritableText(dir) }
         outputDirectory = dir
+        lastMessage = nil   // eine alte „Ablage nicht gefunden“ gilt nicht mehr
         environment.defaults.set(dir.path, forKey: Self.outputDirectoryKey)
         return nil
     }
@@ -256,6 +257,7 @@ final class ScannerController {
             report(ResultMessage(title: "Scan nicht gestartet", body: Self.notWritableText(outputDirectory), files: []))
             return
         }
+        lastMessage = nil   // während des Scans zählt der Status, danach das neue Ergebnis
         let profile = self.profile, namer = self.namer, dir = outputDirectory
         let runJob = environment.runJob
         state = .scanning(page: 0)

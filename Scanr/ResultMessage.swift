@@ -25,7 +25,7 @@ nonisolated struct ResultMessage: Equatable, Sendable {
                 body = error == .scanner(.noDocuments) && result.sheets == 0 ? problem : "\(problem), nichts gespeichert"
             } else {
                 title = "Scan unvollständig"
-                body = "\(problem). \(Self.saved(result))"
+                body = "\(problem). \(Self.saved(result))" + Self.withoutText(result)
             }
         } else if result.files.isEmpty {
             title = "Nichts gespeichert"
@@ -34,10 +34,13 @@ nonisolated struct ResultMessage: Equatable, Sendable {
             title = "Scan gespeichert"
             let first = result.files[0].lastPathComponent
             body = result.files.count == 1 ? first : "\(Self.count(result.files.count, "Datei", "Dateien")), erste: \(first)"
-            if result.pagesWithoutText > 0 {
-                body += ". Ohne Texterkennung: \(Self.count(result.pagesWithoutText, "Seite", "Seiten"))"
-            }
+            body += Self.withoutText(result)
         }
+    }
+
+    /// Zusatz, wenn im PDF Seiten ohne Textebene stehen.
+    private static func withoutText(_ result: ScanResult) -> String {
+        result.pagesWithoutText > 0 ? ". Ohne Texterkennung: \(count(result.pagesWithoutText, "Seite", "Seiten"))" : ""
     }
 
     private static func count(_ n: Int, _ one: String, _ many: String) -> String {

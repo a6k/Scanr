@@ -25,6 +25,14 @@ struct ResultMessageTests {
         #expect(m.body == "2026-10-22 scan 01.pdf. Ohne Texterkennung: 2 Seiten")
     }
 
+    @Test func incompleteScanAlsoNamesPagesWithoutText() {
+        let pdf = URL(fileURLWithPath: "/tmp/2026-10-22 scan 01.pdf")
+        let m = ResultMessage(ScanResult(files: [pdf], pages: 2, sheets: 2, error: .scanner(.paperJam),
+                                         scannerError: .paperJam, pagesWithoutText: 1))
+        #expect(m.title == "Scan unvollständig")
+        #expect(m.body.hasSuffix(". Ohne Texterkennung: 1 Seite"))
+    }
+
     @Test func onlyBlankPages() {
         let m = ResultMessage(ScanResult(files: [], pages: 0, error: nil))
         #expect(m.title == "Nichts gespeichert")
